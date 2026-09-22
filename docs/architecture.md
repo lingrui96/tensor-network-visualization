@@ -150,7 +150,7 @@ A small package that draws what the engine computed:
 - text nodes, in the document's fonts.
 
 The runtime's macros form a versioned protocol between the TikZ backend and
-TeX, documented next to the runtime.
+TeX, specified in `docs/protocol.md`.
 
 It does not lay out, compute geometry, order fragments, or interpret tnv.  It
 changes nothing outside tnv figures.
@@ -176,8 +176,8 @@ retired.
 |---|---|
 | language → engine | `docs/language.md`, including the attribute registry and geometry semantics |
 | engine → Rust API | the public API of the `tnviz` crate |
-| TeX → engine | `.tnv` files and `.tnvm` label sizes |
-| engine → TeX | `.tikz` files in the runtime protocol |
+| TeX → engine | `.tnv` files, and `.tnvm` with the list of figures and label sizes (`docs/protocol.md`) |
+| engine → TeX | `.tikz` files in the runtime protocol (`docs/protocol.md`) |
 
 ## 6. Audit of the repository, 2026-09-22
 
@@ -185,6 +185,10 @@ The repository was built before this architecture.  Its prototype TeX package
 plays three parts at once, and the Rust crate mixes the engine with the API.
 
 ### 6.1 Language (docs/language.md)
+
+Addressed by language v0.3 and `docs/protocol.md`: L1 (section 8), L2
+(section 10), L3 (sections 8.10 and 12.3), L4 (section 10.3), L5 (section
+7.2), and L6.  The implementation has not caught up yet.
 
 | # | Finding | Should be |
 |---|---|---|

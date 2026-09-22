@@ -1,7 +1,17 @@
-# The tnv language — draft specification (v0.2)
+# The tnv language — draft specification (v0.3)
 
-Status: draft for discussion. Section 12 records decided and deferred
-questions.
+Status: draft for discussion.  Section 13 records decided and deferred
+questions.  `docs/architecture.md` describes the programs that implement the
+language, and `docs/protocol.md` the files they exchange.
+
+Changes in v0.3:
+- Geometry semantics are specified (section 8).
+- An attribute registry replaces the attribute tables; every attribute has a
+  category, type, default, and reader, and unknown attributes are errors
+  (section 10).
+- Scene-level spacing (section 7).
+- Tensor labels default to the name; how it is typeset is the backend's
+  choice.
 
 Changes in v0.2:
 - The core data model is now an index model, which interoperates directly
@@ -9,6 +19,11 @@ Changes in v0.2:
 - The simple graph syntax is the main form; the index syntax is the core and
   the exchange format.
 - Lengths are relative; the outer layer decides the physical size.
+
+Parts of this version are ahead of the implementation: the `spacing`
+statement, attribute validation, and everything after layout (sections 8 and
+12) are specified but not yet implemented, and the implementation still reads
+and writes `tnv 0.2`.
 
 ## 1. Role
 
@@ -24,10 +39,10 @@ source of truth:
 ```
 
 - People write it by hand and programs export it; the two are equivalent.
-- The compiler computes layout, geometry, and drawing order; backends only
-  produce output.
+- The language defines what a figure means, geometry included.  The compiler
+  computes it; backends only produce output.
 - All text (tensor names, labels) is typeset by LaTeX, in the document's
-  fonts.
+  fonts, and all colours are resolved by xcolor.
 
 ## 2. Prior art
 
@@ -139,10 +154,14 @@ A tnv tensor name is therefore `name` or `name[subscripts]`, such as `A`,
   - the minimum size of a tensor, which always fits its own name.
 - **Absolute units:** `pt`, `mm`, and so on remain available as exceptions.
 
+Lengths default to layout units, with two exceptions that default to `em`:
+line widths and gaps between labels and bonds.  The registry (section 10.3)
+gives the unit of every attribute.
+
 ## 6. Simple syntax (main form)
 
 This is the everyday hand-written form.  The compiler expands it into the
-index model of section 8: every bond creates an index tagged `Link`, and
+index model of section 9: every bond creates an index tagged `Link`, and
 every open leg creates an index tagged `Site`.
 
 ### 6.1 Names and ranges
@@ -241,26 +260,208 @@ T[*]: leg +z
 T[*] [shape=box]
 ```
 
-## 7. Layout and directions
+## 7. Layout
 
+Layout decides where tensors are, how they are turned, and which way legs and
+bonds leave them.  All of it is in layout units.
+
+### 7.1 Placement
+
+- `A at (x, y)` pins a tensor.  `B right of A, d` (also `left of`, `above`,
+  `below`) places one tensor relative to another, `d` layout units away.
+- `chain` places its tensors in a row, `grid` on a grid with row 1 at the top,
+  `stack` places the first tensors of its groups in a column from top to
+  bottom, and `tree R dir` places the tensors reachable from `R` as a tree
+  growing in direction `dir`, with each parent centred over its children.
+- These statements fix relative positions and join tensors into rigid blocks.
+  Statements that contradict one another are errors.
+- Tensors that no statement places are laid out automatically.  The
+  automatic layout aims at bonded tensors being `spacing` apart and is
+  deterministic.  Unconnected parts are placed left to right.
+
+### 7.2 Spacing
+
+```
+spacing 2
+```
+
+`spacing` sets the distance, in layout units, used by `chain`, `grid`,
+`stack`, `tree`, relative placement without a distance, and the automatic
+layout.  The default is 2.
+
+### 7.3 Orientation and directions
+
+- `rotate` turns a tensor about its centre, in degrees, counter-clockwise.
 - **Leg directions** are given in the tensor's local frame and turn with the
   tensor:
   - 2D: `up`, `down`, `left`, `right`, `up-left`, and so on, or an angle;
   - 3D: `+x`, `-y`, `+z`, or a vector such as `(0, 0, 1)`.
-- **Without a direction:** a bond points towards the tensor it connects to;
-  an open leg follows its prime level, prime level 0 pointing down and 1
+- **Without a direction:** a bond heads for the next point of its route; an
+  open leg follows its prime level, prime level 0 pointing down and 1
   pointing up.  An MPO's `s` and `s'` therefore separate on their own, and so
   do bra and ket.
-- **Bond routes:** `A - B [via=(2, 1), (3, 1)]`.  Corners are filleted
-  automatically, and crossings may `hop`.
+- **Routes:** `A - B [via=(2, 1), (3, 1)]` lists points a bond passes
+  through, in page coordinates.
 
-## 8. Index syntax (core and exchange format)
+## 8. Geometry
+
+This section defines the shapes that layout does not: outlines, where bonds
+meet them, how bends are rounded, and where labels sit.  All lengths are in
+layout units unless stated otherwise.
+
+### 8.1 Frames
+
+The page frame has x to the right and y up.  A tensor's local frame has its
+origin at the tensor's centre and is turned by its `rotate`.  Shapes, leg
+directions, and loops are defined in the local frame.  The light is fixed in
+the page frame and does not turn with tensors.
+
+### 8.2 Tensor shapes
+
+Every shape is centred on the tensor's position and fits a `width` × `height`
+box in the local frame.
+
+| Shape | Outline |
+|---|---|
+| `rect` | the box |
+| `orb` | a circle of diameter `width`; `height` and `corner-radius` are ignored |
+| `triangle` | apex at the top centre of the box, base along its bottom edge |
+| `diamond` | vertices at the midpoints of the box's edges |
+| `dot` | a filled circle of diameter `width`, drawn without its label; for delta tensors |
+
+Every vertex of a polygonal shape is rounded by a circular fillet of radius
+`corner-radius`.  The radius is reduced, without a warning, so that no fillet
+uses more than half of either edge next to it; a very large radius therefore
+gives the roundest shape that the edges allow.
+
+**Default sizes.**  Without `width` and `height`, a shape takes the default
+size of the registry, enlarged if needed so that the tensor's label fits with
+`label-padding` on every side.  An explicit `width` or `height` is used as
+given; a label that does not fit is a warning.
+
+The **silhouette** of a tensor is its outline.  The **boundary distance** in a
+direction is the distance from the centre to the silhouette along that
+direction.
+
+### 8.3 Bond centrelines
+
+A bond is drawn along a centreline through these points, in order:
+
+1. the centre of its first tensor;
+2. if that end has a leg direction `d`, the **exit point**: the centre plus
+   `d` times (boundary distance in `d` + `stub`);
+3. the points of `via`;
+4. the exit point of the second end, if it has a leg direction;
+5. the centre of the second tensor.
+
+Consecutive points closer than 10⁻⁴ are merged.  An end may also be a
+coordinate instead of a tensor; the centreline then starts or stops there.
+
+**Bends.**  At every interior point where the direction turns by an angle δ
+(|δ| ≥ 0.5°), the corner is replaced by a circular arc tangent to both
+segments.  Its radius is `bend-radius`, reduced where needed so that the arc
+uses at most half of either segment:
+
+    ρ = min(bend-radius, ½ · min(ℓ_in, ℓ_out) / tan(|δ| / 2))
+
+A tube whose bend radius ends up smaller than the tube's radius overlaps
+itself at that bend; this is a warning.
+
+**Visible length.**  The parts of a centreline inside the silhouettes of its
+end tensors are hidden under the tensors.  Positions along a bond (for labels)
+are measured along the visible part only.
+
+### 8.4 Bonds as lines and tubes
+
+- A **line** is the centreline stroked with `width` (in `em`) and round caps.
+- A **tube** is the set of points within `width` / 2 of the centreline.  Where
+  the centreline ends at a coordinate rather than a tensor, the tube ends with
+  a hemispherical cap (`cap=round`) or a flat cut (`cap=flat`).
+
+### 8.5 Open legs
+
+An open leg is a centreline from the tensor's centre in its leg direction `d`
+to the centre plus `d` times (boundary distance in `d` + `leg-length`).  It is
+drawn like a bond of its style, with its cap at the free end.
+
+### 8.6 Parallel bonds and loops
+
+- **Parallel bonds.**  When n bonds without `via` join the same two tensors,
+  bond k (k = 0 … n − 1, in index order) gets one route point: the midpoint of
+  the two centres, moved sideways by (k − (n − 1)/2) × `parallel-gap`.
+- **Loops.**  A bond without `via` from a tensor to itself gets two route
+  points in the tensor's local frame, at (± 0.35 w, h/2 + (k + 1) ×
+  `loop-size`), where w × h is the tensor's box and k counts earlier loops on
+  the same tensor.
+
+### 8.7 Crossings and hops
+
+Two centrelines cross where they intersect outside every tensor's silhouette.
+At a crossing, the bond with the higher drawing key (section 8.9) is drawn
+on top.
+
+With `crossing=hop` on the upper bond, each crossing on one of its straight
+pieces is replaced by a semicircular hop.  With c the crossing, e the piece's
+direction, and n its normal pointing up (or left, if the piece is vertical),
+the centreline passes through
+
+    c − h e,   c − h e + (h + r) n,   c + h e + (h + r) n,   c + h e,
+
+where h is `hop-radius`.  The two upper points get fillets of radius h, which
+join into a semicircle about c + r n; the two base points get fillets of
+radius r, which is 0 for a line (a sharp corner, as in circuit diagrams) and
+`bend-radius` for a tube.  A crossing on a bend, or a hop that does not fit
+on its piece, is left alone with a warning.
+
+### 8.8 Labels
+
+- **Tensor labels** are centred on the tensor and stay upright whatever its
+  rotation.
+- **Bond labels** sit at the fraction `label-pos` of the bond's visible
+  length, then move by `label-along` along the bond and `label-offset` across
+  it, and finally by `label-shift` in page coordinates.
+  - `label-placement=on`: centred on the centreline and turned along its
+    tangent, by a multiple of 180° chosen to keep the text upright.  A label
+    taller than the tube is a warning.
+  - `label-placement=beside`: upright, its box touching the line at half the
+    bond's width plus `label-distance` from the centreline, on the side given
+    by `label-side`.  `auto` is the side whose normal points up, or left on a
+    vertical bond; `left` and `right` are relative to the bond's direction
+    from its first end to its second.
+- **Open-leg labels** follow the bond-label rules along the leg.
+
+### 8.9 Drawing order
+
+Every drawn piece has a key (pass, depth, class, z, order), compared in that
+order, lower first:
+
+- pass: background, scene, overlay;
+- depth: distance from the viewer, far first; constant in 2D;
+- class: bonds, tensor shadows, tensors, then bonds with `layer=front`;
+- z: the `z` attribute;
+- order: the source order.
+
+Tensors therefore cover the ends of their bonds, and their shadows fall on
+bonds.  Labels printed on a tube belong to the tube; labels beside bonds are
+in the overlay pass.
+
+### 8.10 Lighting
+
+`light` sets the direction of the world light (default 135°, from the upper
+left).  Surfaces facing the light are brighter and surfaces facing away are
+darker; a tensor's rim highlight follows its outline and bends around its
+corners, and a tube's highlight follows its axis.  `highlight-size` scales the
+width of the rims and `highlight-inset` moves the brightest part inwards.
+The formulas are the engine's lighting model, documented with the engine; the
+language defines only these parameters.
+
+## 9. Index syntax (core and exchange format)
 
 Rust exports this form.  It can also be written by hand when indices must be
 matched exactly.
 
 ```
-tnv 0.2
+tnv 0.3
 
 index s[1..4] : Site                   // physical indices
 index l[1..3] : Link                   // virtual indices
@@ -282,9 +483,13 @@ tensor W[n] (s[n], s[n]', w[n-1], w[n])  for n in 2..3
 - The simple syntax and the index syntax may be mixed in one file; both
   produce the same model.
 
-## 9. Style and inheritance
+## 10. Attributes
 
-### 9.1 Selectors and precedence
+### 10.1 Setting attributes
+
+Attributes of every category are set the same way: a selector followed by an
+attribute list, or an attribute list written at the end of the statement that
+creates the object.
 
 | Selector | Examples |
 |---|---|
@@ -293,82 +498,121 @@ tensor W[n] (s[n], s[n]', w[n-1], w[n])  for n in 2..3
 | group | `ket`, `op` |
 | name | `A[3]`, `A[*]`, `T[*, 1]` |
 | one bond | `A[3] - A[4]`, or its index name `l[3]` |
-| built-in class | `leg.open`, `bond.hop` |
+| one leg | `A.r`, `A[*].p`, `A.#2` (the second leg) |
+| built-in class | `leg.open` |
 
 Precedence from low to high: type < tag / group < name.  At the same level,
-later rules override earlier ones.
+later rules override earlier ones.  An attribute written on a creating
+statement counts as a name-level rule at that position.
 
-### 9.2 Bond label content
+The category of an attribute (section 10.3) decides which stage reads it, not
+how it is set: `T[*] [rotate=90]` is set like `T[*] [color=red]`, but it is
+read by layout.
 
-Besides literal text (`label=$\chi$`), a label can be generated from the
-index:
+`[tube]`, `[line]`, and `[hop]` are short for `[style=tube]`,
+`[style=line]`, and `[crossing=hop]`.
 
-```
-- [label=dim]                  // the dimension, such as 8
-- [label=name]                 // the index name, such as l_{3}
-- [label=dim+prime]            // dimension and prime level
-```
+### 10.2 Values
 
-No label is shown by default.
+| Type | Written as |
+|---|---|
+| number | `2`, `-1.5`, `.5` |
+| length | a number with a unit (`2mm`, `.08em`); without a unit, the attribute's default unit |
+| angle | a number, in degrees |
+| direction | `up`, `down-left`, `+z`, an angle, or a vector `(0, 0, 1)` |
+| points | `(2, 1), (3, 1)` |
+| colour | an xcolor expression such as `blue!64!black`, passed to xcolor unchanged |
+| text | `$…$` math or `"…"`; `#"…"#` when the text contains quotes |
+| word | one of the listed choices |
 
-### 9.3 Attributes (matching the current TeX implementation)
+Label text may also be generated from a bond's index: `label=dim` (its
+dimension), `label=name` (its name), `label=dim+prime` (dimension and prime
+level).
 
-Lengths are in layout units unless stated otherwise.
+### 10.3 Registry
+
+"Read by" names the stage of `docs/architecture.md` that uses the attribute.
+Unknown attributes, and values of the wrong type, are errors.
+
+**Scene statements**
+
+| Statement | Category | Values | Default | Read by |
+|---|---|---|---|---|
+| `2d`, `3d` | layout | — | `2d` | layout, geometry |
+| `spacing` | layout | number | `2` | layout |
+| `light` | appearance | angle (2D) or vector (3D) | `135` | lighting model |
+| `camera` | layout | azimuth and elevation; `[projection=orthographic\|perspective]` | — | layout (3D) |
 
 **Tensors**
 
-| Attribute | Values | Default |
-|---|---|---|
-| `shape` | 2D: `orb`, `rect`, `triangle`, `diamond`, `dot`; 3D: `sphere`, `box`, `dot`, … | `rect` |
-| `width`, `height` | layout units | fitted to the name |
-| `corner-radius` | layout units | `.2` |
-| `rotate` | angle | `0` |
-| `color` | colour | `black!48` |
-| `label` | text; `none` hides it | the name, so `T[1,2]` shows $T_{1,2}$ |
-| `label-color`, `label-font` | — | chosen from the fill |
-| `highlight-size`, `highlight-inset` | number, layout units | `.66`, `0` |
-| `z` | number | `0` |
+| Attribute | Category | Type | Default | Read by |
+|---|---|---|---|---|
+| `shape` | geometry | `rect`, `orb`, `triangle`, `diamond`, `dot`; 3D: `sphere`, `box`, `dot` | `rect` | geometry |
+| `width`, `height` | geometry | length | `rect` 1.1 × .75, `orb` .8, `triangle` 1 × .85, `diamond` 1.05 × .85, `dot` .15; enlarged to fit the label | geometry |
+| `corner-radius` | geometry | length | `.12` | geometry |
+| `rotate` | layout | angle | `0` | layout |
+| `color` | appearance | colour | `black!48` | lighting model |
+| `label` | appearance | text, or `none` | the name | backend |
+| `label-color` | appearance | colour, or `auto` | `auto` | lighting model |
+| `label-font` | appearance | backend font; for TikZ, a LaTeX font switch such as `\small` | the backend's | backend |
+| `label-padding` | geometry | length (`em`) | `.3em` | geometry |
+| `highlight-size` | appearance | number | `.66` | lighting model |
+| `highlight-inset` | appearance | length | `0` | lighting model |
+| `shadow` | appearance | `on`, `off` | `on` | lighting model |
+| `z` | order | number | `0` | order |
 
-**Bonds and legs**
+**Bonds and open legs**
 
-| Attribute | Values | Default |
-|---|---|---|
-| `style` | `line`, `tube` (`[tube]` is short for `style=tube`) | `line` |
-| `width` | line width (em) or tube diameter (layout units) | line `.09em`, tube `.22` |
-| `color` | colour | line `black!72`, tube `black!42` |
-| `via`, `bend-radius` | list of points, layout units | —, `.2` |
-| `cap` | `round`, `flat` | `round` |
-| `crossing`, `hop-radius` | `none`, `hop` (`[hop]` is short); layout units | `none` |
-| `arrow` | `none`, `forward`, `backward` | from the index direction |
-| `layer` | `back`, `front` | `back` |
-| `z` | number | `0` |
-| `label` | text, `dim`, `name`, … | none |
-| `label-pos` | 0 to 1 | `.5` |
-| `label-placement` | `on`, `beside` | tube `on`, line `beside` |
-| `label-side` | `auto`, `left`, `right` | `auto` |
-| `label-along`, `label-offset` | shift along / across the bond | `0` |
-| `label-shift` | shift in page coordinates | `(0, 0)` |
-| `leg-dir`, `leg-length` | direction, open-leg length | automatic, `.6` |
+| Attribute | Applies to | Category | Type | Default | Read by |
+|---|---|---|---|---|---|
+| `style` | bonds, legs | geometry | `line`, `tube` | `line` | geometry |
+| `width` | bonds, legs | geometry | length: `em` for lines, layout units for tubes | line `.09em`, tube `.22` | geometry |
+| `color` | bonds, legs | appearance | colour | line `black!72`, tube `black!42` | lighting model |
+| `via` | bonds | layout | points | — | layout |
+| `bend-radius` | bonds, legs | geometry | length | `max(.2, .8 × width)` | geometry |
+| `stub` | bonds | geometry | length | `bend-radius + width / 2` | geometry |
+| `cap` | legs, bonds ending at coordinates | geometry | `round`, `flat` | `round` | geometry |
+| `parallel-gap` | bonds | geometry | length | `max(.3, 1.5 × width)` | geometry |
+| `loop-size` | bonds | geometry | length | `.45` | geometry |
+| `crossing` | bonds | geometry | `none`, `hop` | `none` | geometry |
+| `hop-radius` | bonds | geometry | length | `max(.15, .7 × (upper width + lower width) + .03)` | geometry |
+| `arrow` | bonds | appearance | `none`, `forward`, `backward` | from the index direction | backend |
+| `layer` | bonds | order | `back`, `front` | `back` | order |
+| `z` | bonds | order | number | `0` | order |
+| `leg-dir` | legs, bond ends | layout | direction | section 7.3 | layout |
+| `leg-length` | legs | geometry | length | `.6` | geometry |
+| `label` | bonds, legs | appearance | text, `dim`, `name`, `dim+prime` | none | backend |
+| `label-pos` | bonds, legs | geometry | number in [0, 1] | `.5` | geometry |
+| `label-placement` | bonds, legs | geometry | `on`, `beside` | tube `on`, line `beside` | geometry |
+| `label-side` | bonds, legs | geometry | `auto`, `left`, `right` | `auto` | geometry |
+| `label-along`, `label-offset` | bonds, legs | geometry | length | `0` | geometry |
+| `label-shift` | bonds, legs | geometry | a point | `(0, 0)` | geometry |
+| `label-distance` | bonds, legs | geometry | length (`em`) | `.15em` | geometry |
+| `label-font` | bonds, legs | appearance | backend font | the backend's | backend |
+| `label-color` | bonds, legs | appearance | colour, or `auto` | `auto` | lighting model |
 
-**Scene**
+Where a default refers to `width`, it means the tube diameter, or 0 for a line.
 
-| Statement | Examples |
-|---|---|
-| dimension | `2d` (default), `3d` |
-| light | `light 135` (2D angle), `light (-1, 1, 2)` (3D vector) |
-| camera (3D) | `camera 35 25` (azimuth, elevation), `camera [projection=perspective]` |
+**Indices**
 
-## 10. 3D
+| Attribute | Category | Type | Default | Read by |
+|---|---|---|---|---|
+| `dim` | structure | positive integer | — | front end |
+
+## 11. 3D
 
 - A `3d` scene accepts only 3D shapes and a 2D scene only 2D shapes; a
   mismatch is an error.  In 3D, `orb` means `sphere`.
 - Occlusion is resolved by the compiler, which orders fragments by depth; the
   language does not describe what is in front.  `z` only breaks ties at
   equal depth.
+- The geometry of section 8 is specified for 2D.  3D shapes, their
+  silhouettes under the camera, and the depth of fragments are not specified
+  yet.
 
-## 11. Entry and exit points
+## 12. Entry and exit points
 
-### 11.1 Rust
+### 12.1 Rust
 
 ```rust
 use tnviz::{Network, Figure, Backend};
@@ -392,7 +636,7 @@ pub trait ToNetwork {
 For tensor4all-rs this is direct: each vertex of a `TreeTN<IdxTensor, V>`
 becomes a tensor, and each `Index` keeps its id, tags, and prime level.
 
-### 11.2 LaTeX
+### 12.2 LaTeX
 
 ```latex
 \usepackage{tnviz}
@@ -406,34 +650,28 @@ becomes a tensor, and each `Index` keeps its id, tags, and prime level.
 \tnvinput[unit=8mm]{figures/peps.tnv}
 ```
 
-The workflow is the same as for BibTeX or biber:
+LaTeX writes each figure's tnv to a file; `tnviz` computes it and writes a
+`.tikz` file; LaTeX draws that file with the document's fonts and colours.
+Label sizes measured by LaTeX flow back to `tnviz` so that geometry can use
+them.  `docs/protocol.md` specifies the files and the order of runs.
 
-1. **First LaTeX run:** write each figure to `\jobname-mps.tnv`, and the
-   typeset size of every label to `\jobname.tnvm`.
-2. **Run `tnviz`:** read `.tnv` and `.tnvm` and write `\jobname-mps.tikz`.
-   This can be a latexmk rule, or LaTeX can call it directly when
-   shell-escape is enabled.
-3. **Second LaTeX run:** input the `.tikz` file; LaTeX typesets its text
-   nodes in the document's fonts.
-
-The `.tikz` file needs only a small runtime package (`tnviz-runtime`) that
-draws the paths, shadings, and text computed in Rust; no geometry is computed
-in TeX.
-
-### 11.3 Backends
+### 12.3 Backends
 
 | Backend | Use | Lighting |
 |---|---|---|
-| TikZ/PGF | LaTeX documents | PDF functional shadings, exact (reference quality) |
+| TikZ/PGF | LaTeX documents | PDF functional shadings from the engine's lighting model, with colours resolved by xcolor (reference quality) |
 | PDF | standalone figures | same |
-| SVG / PNG | previews, web, notebooks | pre-rendered high-resolution images or approximate gradients; small differences allowed |
+| SVG / PNG | previews, web, notebooks | the same model, rendered to images or approximated by gradients; small differences allowed |
 
-## 12. Decided and deferred
+## 13. Decided and deferred
 
 **Decided**
 - **Position information in index tags is not read** (for example ITensors'
   `n=3` and `l=3`).  Tags are only style selectors; order always comes from
   the layout syntax.
+- **Attributes of every category share one selector syntax and cascade**;
+  the category decides only which stage reads them.
+- **Corner radii are clamped silently; bends tighter than a tube warn.**
 
 **Deferred**
 - **Whether `grid` connects neighbours, and the default direction of open
@@ -442,3 +680,4 @@ in TeX.
   describe the current behaviour.
 - **Julia export:** not needed for now; it can be written when there is a
   use for it.
+- **3D geometry** (section 11).
