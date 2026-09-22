@@ -7,9 +7,7 @@ use std::fmt::Write;
 
 use crate::geometry::{
     Anchor, ArrowGeom, Cap, Geometry, GeometryOptions, LabelOwner, LabelText, LineKind, Path, Piece,
-    clip_convex, clip_polyline_convex, tube_region, tube_sides,
 };
-use crate::layout::V3;
 use crate::lighting::{ArrowLook, Colour, LabelColour, Lighting, LineLook, Other, Shading, Stroke};
 use crate::model::Network;
 use crate::order::{Fragment, Part};
@@ -17,7 +15,7 @@ use crate::registry::get;
 use crate::value::Value;
 
 /// The protocol version written by `\tnvRuntime`.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 /// A figure as runtime-protocol TeX code, to be input inside its
 /// `tikzpicture`.  `fragments` must come from [`crate::order`] and
@@ -94,8 +92,8 @@ impl Writer<'_> {
         let line = |k: usize| (Object::Line(k), self.lighting.line_opacity[k]);
         match part {
             Part::TensorShadow(t) => (Object::Shadow(t), 1.0),
-            Part::Tensor(t) | Part::TensorFront(t) => tensor(t),
-            Part::Line(k) | Part::Arrow(k) | Part::Span(k, _) | Part::SpanFront(k, _) => line(k),
+            Part::Tensor(t) => tensor(t),
+            Part::Line(k) | Part::Arrow(k) => line(k),
             // A plane's fill and edge have their own opacities.
             Part::Plane(k) => (Object::Plane(k), 1.0),
             Part::Label(k) => match self.geom.labels[k].owner {
@@ -105,7 +103,46 @@ impl Writer<'_> {
         }
     }
 
+    /// The holes of the object a fragment belongs to (language section
+    /// 11.7): none in 2D.
+    fn holes(&self, part: Part) -> &[Vec<Path>] {
+        match part {
+            Part::TensorShadow(_) => &[],
+            Part::Tensor(t) => &self.geom.tensors[self.tensor_index(t)].drawn.holes,
+            Part::Line(k) | Part::Arrow(k) => &self.geom.lines[k].drawn.holes,
+            Part::Plane(k) => &self.geom.planes[k].drawn.holes,
+            Part::Label(k) => &self.geom.labels[k].drawn.holes,
+        }
+    }
+
+    /// A fragment, clipped out of its object's holes.
     fn fragment(&self, s: &mut String, part: Part) {
+        let holes = self.holes(part);
+        let (Some((lo, hi)), false) = (self.geom.frame, holes.is_empty()) else {
+            return self.draw(s, part);
+        };
+        let mut body = String::new();
+        self.draw(&mut body, part);
+        // The frame counter-clockwise, and each hole set wound the other way.
+        let frame = format!(
+            "({},{}) -- ({},{}) -- ({},{}) -- ({},{}) -- cycle",
+            num(lo.x),
+            num(lo.y),
+            num(hi.x),
+            num(lo.y),
+            num(hi.x),
+            num(hi.y),
+            num(lo.x),
+            num(hi.y)
+        );
+        for set in holes.iter().rev() {
+            let loops: Vec<String> = set.iter().map(path_code).collect();
+            body = format!("\\tnvClipOut{{{frame} {}}}{{%\n{body}}}%\n", loops.join(" "));
+        }
+        s.push_str(&body);
+    }
+
+    fn draw(&self, s: &mut String, part: Part) {
         match part {
             Part::TensorShadow(t) => {
                 let k = self.tensor_index(t);
@@ -163,45 +200,6 @@ impl Writer<'_> {
                 }
                 _ => {}
             },
-            Part::Span(k, i) => self.span(s, k, i),
-            Part::TensorFront(t) => {
-                // The part in front of a plane: the same surface, clipped.
-                let k = self.tensor_index(t);
-                let (geom, look) = (&self.geom.tensors[k], &self.lighting.tensors[k]);
-                let front = geom.front.as_ref().expect("a cut tensor");
-                let clip = front.region.sample(0.02);
-                shade(s, &path_code(&front.region), &look.face);
-                for (region, shading) in &look.patches {
-                    let part = clip_convex(&region.sample(0.02), &clip);
-                    if part.len() >= 3 {
-                        shade(s, &path_code(&polygon_path(&part)), shading);
-                    }
-                }
-                // Only the outline, not the cut, is stroked.
-                let mut outline = geom.outline.sample(0.02);
-                if let Some(first) = outline.first().copied() {
-                    outline.push(first);
-                }
-                for run in clip_polyline_convex(&outline, &clip) {
-                    self.stroke(s, &path_code(&open_path(&run)), &look.outline, "round");
-                }
-            }
-            Part::SpanFront(k, i) => {
-                let line = &self.geom.lines[k];
-                let (Some(Some(front)), LineLook::Tube { shading, outline }) =
-                    (line.fronts.get(i), &self.lighting.lines[k])
-                else {
-                    return;
-                };
-                shade(s, &path_code(&front.region), shading);
-                let span = line.spans[i];
-                let sides = tube_sides(&line.centerline.slice(span.from, span.to), line.width / 2.0);
-                for (side, shown) in sides.iter().zip(front.sides) {
-                    if shown {
-                        self.stroke(s, &path_code(side), outline, "round");
-                    }
-                }
-            }
             Part::Plane(k) => {
                 let (geom, look) = (&self.geom.planes[k], &self.lighting.planes[k]);
                 let path = path_code(&geom.outline);
@@ -212,67 +210,6 @@ impl Writer<'_> {
                 let _ = write!(s, "\\tnvGroup{{{}}}{{%\n{edge}}}%\n", num(look.edge_opacity));
             }
             Part::Label(k) => self.label(s, k),
-        }
-    }
-
-    /// One span of a 3D line: its part of the stroke, or of the tube, with
-    /// the tube's sides stroked, and its caps only at the line's own ends.
-    fn span(&self, s: &mut String, k: usize, i: usize) {
-        let line = &self.geom.lines[k];
-        let span = line.spans[i];
-        let total = line.centerline.length();
-        // A cone ends the tube at its base.
-        let (lo, hi) = match &line.arrow {
-            Some(ArrowGeom::Cone { base_at, forward: true, .. }) => (0.0, *base_at),
-            Some(ArrowGeom::Cone { base_at, forward: false, .. }) => (*base_at, total),
-            _ => (0.0, total),
-        };
-        let (from, to) = (span.from.max(lo), span.to.min(hi));
-        if to <= from + 1e-9 {
-            return;
-        }
-        let piece = line.centerline.slice(from, to);
-        match &self.lighting.lines[k] {
-            LineLook::Stroke(stroke) => self.stroke(s, &path_code(&piece), stroke, "round"),
-            LineLook::Tube { shading, outline } => {
-                let r = line.width / 2.0;
-                // Round caps only at the line's own ends, not at a cone.
-                let own =
-                    |at: f64, end: f64, kind: Cap| if (at - end).abs() < 1e-9 { kind } else { Cap::Flat };
-                let caps = (own(from, 0.0, line.caps.0), own(to, total, line.caps.1));
-                // Where the tube meets its tensors, at the line's own ends.
-                let at_start = (from - 0.0).abs() < 1e-9;
-                let at_end = (to - total).abs() < 1e-9;
-                let junctions = [
-                    line.junctions[0].as_deref().filter(|_| at_start),
-                    line.junctions[1].as_deref().filter(|_| at_end),
-                ];
-                shade(s, &path_code(&tube_region(&piece, r, caps, junctions)), shading);
-                for side in tube_sides(&piece, r) {
-                    self.stroke(s, &path_code(&side), outline, "round");
-                }
-                for curve in junctions.into_iter().flatten() {
-                    let pieces = curve.windows(2).map(|w| Piece::Line { a: w[0], b: w[1] }).collect();
-                    self.stroke(s, &path_code(&Path { pieces, closed: false }), outline, "round");
-                }
-                let arc = |p: V3, d: V3| Path {
-                    pieces: vec![Piece::Arc {
-                        center: p,
-                        radius: r,
-                        start: d.x.atan2(-d.y),
-                        sweep: -std::f64::consts::PI,
-                    }],
-                    closed: false,
-                };
-                if caps.0 == Cap::Round && junctions[0].is_none() {
-                    let (p, d) = piece.at(0.0);
-                    self.stroke(s, &path_code(&arc(p, -d)), outline, "round");
-                }
-                if caps.1 == Cap::Round && junctions[1].is_none() {
-                    let (p, d) = piece.at(piece.length());
-                    self.stroke(s, &path_code(&arc(p, d)), outline, "round");
-                }
-            }
         }
     }
 
@@ -371,15 +308,6 @@ fn colour(c: &Colour) -> String {
     format!("\\tnvSlot{{{}}}!{}!{other}", c.slot, num(percent))
 }
 
-fn polygon_path(pts: &[V3]) -> Path {
-    let n = pts.len();
-    Path { pieces: (0..n).map(|k| Piece::Line { a: pts[k], b: pts[(k + 1) % n] }).collect(), closed: true }
-}
-
-fn open_path(pts: &[V3]) -> Path {
-    Path { pieces: pts.windows(2).map(|w| Piece::Line { a: w[0], b: w[1] }).collect(), closed: false }
-}
-
 /// A path in TikZ syntax, in layout units.
 fn path_code(path: &Path) -> String {
     let mut s = String::new();
@@ -459,7 +387,7 @@ mod tests {
     fn a_figure_in_protocol_order() {
         let s = figure("A at (0, 0)\nB at (3, 0)\nA - B [style=tube, label=\"k_1 & 50%\"]\n");
         let lines: Vec<&str> = s.lines().collect();
-        assert_eq!(lines[0], "\\tnvRuntime{3}%");
+        assert_eq!(lines[0], "\\tnvRuntime{4}%");
         let src = "A at (0, 0)\nB at (3, 0)\nA - B [style=tube, label=\"k_1 & 50%\"]\n";
         assert_eq!(
             lines[1],

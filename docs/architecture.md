@@ -228,7 +228,7 @@ changes only through checked operations), E7 (`LayoutStmt` and
 for 2D, the lighting model is built and documented in docs/lighting.md,
 the TikZ backend writes the runtime protocol, and `tnviz tex` reads
 `.tnvm`, and 3D scenes are built (language section 11: solids, orthographic
-views, depth ordering in spans and layers, planes); resolved printing and
+views, a depth compositor that cuts holes, planes); resolved printing and
 perspective views remain.
 
 ### 6.3 CLI (crates/tnviz-cli)

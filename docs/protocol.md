@@ -84,7 +84,7 @@ The first command checks the protocol version, and the second records what
 the figure was computed from:
 
 ```latex
-\tnvRuntime{3}
+\tnvRuntime{4}
 \tnvSource{<md5>}{<unit>}{<em>}
 ```
 
@@ -122,6 +122,7 @@ them.
 | `\tnvFill{<path>}{<colour>}{<opacity>}` | a filled path |
 | `\tnvStroke{<path>}{<colour>}{<width>}{<cap>}` | a stroked path; `<width>` is a TeX length, `<cap>` is `round` or `butt` |
 | `\tnvShade{<path>}{<cx>}{<cy>}{<extent>}{<code>}` | a PDF functional shading clipped to the path, on the square of half-size `<extent>` centred at (`<cx>`, `<cy>`); `<code>` is PostScript calculator code taking page coordinates and returning RGB, using at most 100 stack entries |
+| `\tnvClipOut{<path>}{<commands>}` | the commands clipped to `<path>` with the nonzero rule; in 3D the engine writes a rectangle around the figure and its holes wound the other way, so that the commands are drawn everywhere but in the holes |
 | `\tnvGroup{<opacity>}{<commands>}` | the commands as one transparency group at `<opacity>`: composed first, then faded together |
 | `\tnvText{<id>}{<x>}{<y>}{<angle>}{<anchor>}{<font>}{<colour>}{<w>}{<h>}{<d>}{<text>}` | a label: `<text>` typeset with `<font>`, turned by `<angle>`, with its `<anchor>` at (`<x>`, `<y>`); `<w>`, `<h>`, `<d>` record the size geometry used, for the rerun check |
 
@@ -154,3 +155,4 @@ such a file as out of date instead (section 1).
 | 1 | first version |
 | 2 | `\tnvSource` |
 | 3 | `\tnvGroup` |
+| 4 | `\tnvClipOut` |
