@@ -14,10 +14,10 @@
 % The LaTeX interface (tnvfigure, .tnvm) will do this; until then it can be
 % done by hand.
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesPackage{tnviz-runtime}[2026/09/22 v0.1 tnviz runtime, protocol 1]
+\ProvidesPackage{tnviz-runtime}[2026/09/22 v0.2 tnviz runtime, protocol 2]
 \RequirePackage{tikz}
 
-\def\tnv@protocol{1}
+\def\tnv@protocol{2}
 
 \newcommand{\tnvRuntime}[1]{%
   \ifnum#1=\tnv@protocol\relax\else
@@ -29,6 +29,11 @@
   \edef\tnv@unit{\strip@pt\pgf@xx}%
   \pgfmathsetmacro\tnv@bpscale{1.00375/\tnv@unit}%
 }
+
+% What the figure was computed from: the MD5 of its tnv source, and the
+% unit and em in pt.  Standalone, the runtime ignores it; the LaTeX
+% interface checks it.
+\newcommand{\tnvSource}[3]{}
 
 % ---- Colours ---------------------------------------------------------------
 

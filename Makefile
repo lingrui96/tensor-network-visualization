@@ -52,7 +52,7 @@ paper:
 	cp -r examples/tnv $(PAPER)/
 	cd $(PAPER) && for run in 1 2 3 4; do \
 	  TEXINPUTS=../../tex: pdflatex -interaction=nonstopmode -halt-on-error paper.tex > /dev/null || exit 1; \
-	  grep -q "rerun tnviz\|not computed yet" paper.log || break; \
+	  grep -q "rerun tnviz\|not computed yet\|out of date" paper.log || break; \
 	  ../../target/debug/tnviz tex paper || exit 1; \
 	done
 	pdftoppm -r 150 -png $(PAPER)/paper.pdf $(PAPER)/page

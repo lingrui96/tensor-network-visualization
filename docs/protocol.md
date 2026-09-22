@@ -29,7 +29,11 @@ The workflow is the same as for BibTeX or biber:
    that fails is reported without stopping the others.
 3. **LaTeX.**  Draws the `.tikz` files.  The runtime typesets every label,
    writes its size to `.tnvm`, and warns "label sizes changed; rerun tnviz"
-   if any size differs from the one recorded by more than 0.01pt.
+   if any size differs from the one recorded by more than 0.01pt.  A figure
+   whose source, unit, or em differs from what its `.tikz` file records
+   (`\tnvSource`) is drawn as it was, with a warning that it is out of date;
+   one written for another protocol version is drawn as a placeholder, with
+   the same warning.
 4. Repeat 2 and 3 until there is no warning, usually once more.
 
 A latexmk rule can run `tnviz` when `.tnvm` changes.  With shell-escape
@@ -75,11 +79,19 @@ figure's `tikzpicture`.  The picture's x and y units are one layout unit, so
 all coordinates are in layout units.  Nothing in the file affects the
 document outside the figure.
 
-The first command checks the protocol version:
+The first command checks the protocol version, and the second records what
+the figure was computed from:
 
 ```latex
-\tnvRuntime{1}
+\tnvRuntime{2}
+\tnvSource{<md5>}{<unit>}{<em>}
 ```
+
+`<md5>` is the MD5 digest of the tnv source file, in upper-case hexadecimal
+as `\file_get_mdfive_hash:nN` writes it; `<unit>` and `<em>` are the figure's
+unit and em in pt, as geometry used them.  The runtime alone ignores
+`\tnvSource`; the LaTeX interface compares it with the current source, unit,
+and em.
 
 ### 3.1 Colours
 
@@ -132,4 +144,10 @@ colours come from the engine's lighting model.
 
 The protocol version changes whenever a command is added, removed, or changes
 meaning.  A runtime refuses a `.tikz` file of a version it does not know, with
-an error naming both versions.
+an error naming both versions.  Inside a document, the LaTeX interface treats
+such a file as out of date instead (section 1).
+
+| Version | Change |
+|---|---|
+| 1 | first version |
+| 2 | `\tnvSource` |

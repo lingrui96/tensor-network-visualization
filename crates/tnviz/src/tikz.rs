@@ -13,22 +13,33 @@ use crate::registry::get;
 use crate::value::Value;
 
 /// The protocol version written by `\tnvRuntime`.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// A figure as runtime-protocol TeX code, to be input inside its
 /// `tikzpicture`.  `fragments` must come from [`crate::order`] and
-/// `lighting` from [`crate::lighting`], both for `geom`.
+/// `lighting` from [`crate::lighting`], both for `geom`.  `source` is the
+/// tnv file's content, fingerprinted so that LaTeX can tell when the file
+/// is out of date.
 pub fn tikz(
     net: &Network,
     geom: &Geometry,
     lighting: &Lighting,
     fragments: &[Fragment],
     opts: &GeometryOptions,
+    source: &str,
 ) -> String {
     let w = Writer { net, geom, lighting, unit_pt: opts.unit_pt };
     let mut s = String::new();
     // Writing to a String cannot fail.
     let _ = writeln!(s, "\\tnvRuntime{{{PROTOCOL}}}%");
+    // Exact decimals: LaTeX compares them with the unit and em it has now.
+    let _ = writeln!(
+        s,
+        "\\tnvSource{{{}}}{{{}}}{{{}}}%",
+        crate::md5::md5_hex(source.as_bytes()),
+        opts.unit_pt,
+        opts.em_pt
+    );
     for (k, expr) in lighting.slots.iter().enumerate() {
         let _ = writeln!(s, "\\tnvColor{{{k}}}{{{expr}}}%");
     }
@@ -258,15 +269,20 @@ mod tests {
         let opts = GeometryOptions::default();
         let geom = geometry(&net, &lay, &opts, &LabelSizes::new()).unwrap();
         let light = lighting(&net, &geom, &opts);
-        tikz(&net, &geom, &light, &order(&net, &geom), &opts)
+        tikz(&net, &geom, &light, &order(&net, &geom), &opts, src)
     }
 
     #[test]
     fn a_figure_in_protocol_order() {
         let s = figure("A at (0, 0)\nB at (3, 0)\nA - B [style=tube, label=\"k_1 & 50%\"]\n");
         let lines: Vec<&str> = s.lines().collect();
-        assert_eq!(lines[0], "\\tnvRuntime{1}%");
-        assert!(lines[1].starts_with("\\tnvColor{0}{black!48}"));
+        assert_eq!(lines[0], "\\tnvRuntime{2}%");
+        let src = "A at (0, 0)\nB at (3, 0)\nA - B [style=tube, label=\"k_1 & 50%\"]\n";
+        assert_eq!(
+            lines[1],
+            format!("\\tnvSource{{{}}}{{28.45274}}{{10}}%", crate::md5::md5_hex(src.as_bytes()))
+        );
+        assert!(lines[2].starts_with("\\tnvColor{0}{black!48}"));
         let first = |cmd: &str| lines.iter().position(|l| l.starts_with(cmd)).unwrap();
         // The tube, then the shadows, the tensors, and the labels.
         assert!(first("\\tnvShade") < first("\\tnvFill"));

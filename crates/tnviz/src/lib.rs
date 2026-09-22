@@ -13,6 +13,7 @@ mod geometry;
 mod lang;
 mod layout;
 mod lighting;
+mod md5;
 mod model;
 mod name;
 mod order;

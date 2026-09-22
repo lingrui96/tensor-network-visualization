@@ -172,8 +172,9 @@ tnviz tex paper     # writes paper-<figure>.tikz
 pdflatex paper      # draws the figures and measures their labels
 ```
 
-If LaTeX warns "Label sizes changed; rerun tnviz", run `tnviz tex` and LaTeX
-once more.  Run `tnviz tex` again after changing a figure.  `make paper`
+If LaTeX warns "Label sizes changed; rerun tnviz" or that a figure is out of
+date (its source, unit, or font size changed since `tnviz tex` computed it),
+run `tnviz tex` and LaTeX once more.  `make paper`
 runs `examples/paper.tex` through the whole cycle into `.preview/paper/`.
 
 A single `.tikz` file from `tnviz tikz` can also be drawn by hand with the

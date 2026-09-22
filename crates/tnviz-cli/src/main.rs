@@ -91,7 +91,8 @@ fn run(args: &[String]) -> Result<(), Failure> {
                 [flag, file] if flag == "-o" => Some(file),
                 _ => return Err(Failure::Usage),
             };
-            let code = figure(path, &net, &tnviz::GeometryOptions::default(), &tnviz::LabelSizes::new())?;
+            let code =
+                figure(path, &net, &src, &tnviz::GeometryOptions::default(), &tnviz::LabelSizes::new())?;
             match out {
                 None => print!("{code}"),
                 Some(file) => std::fs::write(file, code)
@@ -108,6 +109,7 @@ fn run(args: &[String]) -> Result<(), Failure> {
 fn figure(
     path: &str,
     net: &tnviz::Network,
+    src: &str,
     opts: &tnviz::GeometryOptions,
     sizes: &tnviz::LabelSizes,
 ) -> Result<String, Failure> {
@@ -118,7 +120,7 @@ fn figure(
         eprintln!("{path}: warning: {w}");
     }
     let light = tnviz::lighting(net, &geom, opts);
-    Ok(tnviz::tikz(net, &geom, &light, &tnviz::order(net, &geom), opts))
+    Ok(tnviz::tikz(net, &geom, &light, &tnviz::order(net, &geom), opts, src))
 }
 
 /// `tnviz tex <job>`: every figure of `<job>.tnvm`, next to it.  Sources
@@ -143,7 +145,7 @@ fn tex(job: &str) -> Result<(), Failure> {
             let src = std::fs::read_to_string(&source)
                 .map_err(|e| Failure::Message(format!("tnviz: cannot read {path}: {e}")))?;
             let net = tnviz::parse(&src).map_err(|e| Failure::Message(format!("{path}:{e}")))?;
-            let code = figure(&path, &net, &f.options(), &f.labels)?;
+            let code = figure(&path, &net, &src, &f.options(), &f.labels)?;
             if std::fs::read_to_string(&out).ok().as_deref() != Some(code.as_str()) {
                 std::fs::write(&out, code)
                     .map_err(|e| Failure::Message(format!("tnviz: cannot write {}: {e}", out.display())))?;

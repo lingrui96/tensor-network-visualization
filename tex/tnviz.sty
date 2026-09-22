@@ -14,7 +14,7 @@
 % \jobname` writes the figures' .tikz files; the next LaTeX run draws them
 % with tnviz-runtime.sty and records the typeset size of every label.
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesPackage{tnviz}[2026/09/22 v0.1 tnv figures]
+\ProvidesPackage{tnviz}[2026/09/22 v0.2 tnv figures]
 \RequirePackage{tnviz-runtime}
 \RequirePackage{fancyvrb}
 
@@ -33,6 +33,7 @@
 \newwrite\tnv@tnvm
 \newif\iftnv@tnvmopen
 \newif\iftnv@missing
+\newif\iftnv@stale
 \newcount\tnv@unnamed
 
 \def\tnv@write#1{%
@@ -73,6 +74,46 @@
 
 % ---- Drawing ---------------------------------------------------------------
 
+% A figure is out of date when its source, unit, or em differs from what
+% its .tikz file was computed from.  It is still drawn, with a warning.
+\ExplSyntaxOn
+\cs_new_protected:Npn \tnv@checksource #1#2#3
+  {
+    \file_get_mdfive_hash:nN { \tnv@source } \l__tnv_hash_tl
+    \bool_if:nF
+      {
+        \str_if_eq_p:Vn \l__tnv_hash_tl {#1}
+        && \dim_compare_p:n { #2pt = \tnv@unitpt pt }
+        && \dim_compare_p:n { #3pt = \tnv@empt pt }
+      }
+      {
+        \legacy_if_gset_true:n { tnv@stale }
+        \PackageWarning { tnviz }
+          { Figure~`\tnv@name'~is~out~of~date;~run~tnviz~tex~\jobname }
+      }
+  }
+\tl_new:N \l__tnv_hash_tl
+\ExplSyntaxOff
+
+% A .tikz file of another protocol version was written by another tnviz:
+% in a document it is out of date, not an error.  The rest of the file is
+% skipped and a placeholder drawn.
+\let\tnv@runtime\tnvRuntime
+\def\tnv@checkruntime#1{%
+  \ifnum#1=\tnv@protocol\relax
+    \expandafter\tnv@runtime
+  \else
+    \global\tnv@staletrue
+    \PackageWarning{tnviz}{Figure `\tnv@name' was computed by another
+      version of tnviz (protocol #1); run tnviz tex \jobname}%
+    \node[draw, font=\ttfamily\small, align=center]
+      {tnv figure \tnv@name\\ run tnviz tex \jobname};%
+    \expandafter\tnv@skipfile
+  \fi
+  {#1}%
+}
+\def\tnv@skipfile#1{\endinput}
+
 % The runtime reports every label's typeset size here.
 \def\tnv@measured#1#2#3#4{\tnv@write{label \tnv@name\space #1 #2 #3 #4}}
 
@@ -81,6 +122,8 @@
   \IfFileExists{\tnv@tikz}{%
     \begingroup
       \let\tnvMeasured\tnv@measured
+      \let\tnvSource\tnv@checksource
+      \let\tnvRuntime\tnv@checkruntime
       \begin{tikzpicture}[x=\tnv@unitlength, y=\tnv@unitlength]
         \input{\tnv@tikz}%
       \end{tikzpicture}%
@@ -94,6 +137,10 @@
 }
 
 \AtEndDocument{%
+  \iftnv@stale
+    \PackageWarningNoLine{tnviz}{Some figures are out of date; run
+      `tnviz tex \jobname' and LaTeX again}%
+  \fi
   \iftnv@missing
     \PackageWarningNoLine{tnviz}{Some figures are not computed yet; run
       `tnviz tex \jobname' and LaTeX again}%
