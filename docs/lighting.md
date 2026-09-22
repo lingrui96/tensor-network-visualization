@@ -161,6 +161,10 @@ Arrows (language section 8.11):
   where ê is the page normal of the axis and â the axis.  Its outline is the
   tube's.
 
+Opacity (language section 8.9) multiplies a tensor's shadow opacity
+directly; everything else of a translucent object is faded as one group by
+the backend.
+
 ## 5. Label colours
 
 Unless `label-color` names a colour, a label's colour is chosen from its

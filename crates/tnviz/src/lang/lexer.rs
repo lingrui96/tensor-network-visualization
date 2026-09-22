@@ -17,6 +17,8 @@ pub enum Tok {
     Dims(usize, usize),
     /// The raw text of an attribute list, without its brackets.
     Attrs(String),
+    /// The raw value of a `let`, up to the end of its line or a `;`.
+    Raw(String),
     Sym(&'static str),
     Newline,
     Eof,
@@ -138,8 +140,21 @@ impl Lexer<'_> {
             } else {
                 return Err(Error::at(pos, format!("unexpected character `{c}`")));
             };
+            // `let name =`: the rest of the statement is a raw value.
+            let starts_let = tok == Tok::Sym("=")
+                && out.len() >= 2
+                && out[out.len() - 2].tok == Tok::Ident("let".into())
+                && matches!(out[out.len() - 1].tok, Tok::Ident(_))
+                && out
+                    .len()
+                    .checked_sub(3)
+                    .is_none_or(|j| matches!(out[j].tok, Tok::Newline | Tok::Sym(";")));
             out.push(Token { tok, pos, attached });
             attached = true;
+            if starts_let {
+                let pos = self.pos();
+                out.push(Token { tok: self.raw_value(pos)?, pos, attached: false });
+            }
         }
         out.push(Token { tok: Tok::Eof, pos: self.pos(), attached: false });
         Ok(out)
@@ -186,6 +201,32 @@ impl Lexer<'_> {
             return Ok(Tok::Dims(r, c));
         }
         Err(Error::at(pos, format!("`{text}` is not a number, a length, or a size like 3x3")))
+    }
+
+    /// A `let` value: up to a `;`, a `//` comment, or the end of the line,
+    /// outside strings, math, and parentheses.
+    fn raw_value(&mut self, pos: Pos) -> Result<Tok> {
+        let start = self.offset();
+        let (mut depth, mut quote, mut math) = (0i32, false, false);
+        while let Some(c) = self.peek(0) {
+            let top = depth == 0 && !quote && !math;
+            if c == '\n' || (top && (c == ';' || (c == '/' && self.peek(1) == Some('/')))) {
+                break;
+            }
+            match c {
+                '"' if !math => quote = !quote,
+                '$' if !quote => math = !math,
+                '(' if !quote && !math => depth += 1,
+                ')' if !quote && !math => depth -= 1,
+                _ => {}
+            }
+            self.bump();
+        }
+        let raw = self.src[start..self.offset()].trim();
+        if raw.is_empty() {
+            return Err(Error::at(pos, "`let` needs a value after `=`"));
+        }
+        Ok(Tok::Raw(raw.to_string()))
     }
 
     /// The raw text of an attribute list; the lexer is at `[`.

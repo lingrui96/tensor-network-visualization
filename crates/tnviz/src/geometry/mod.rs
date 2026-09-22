@@ -216,6 +216,7 @@ pub fn geometry(
         if let Some(label) = g.line_label(k, line) {
             labels.push(label);
         }
+        labels.extend(g.end_labels(k, line));
     }
     for (k, line) in lines.iter_mut().enumerate() {
         let label = labels.iter().find(|l| l.owner == LabelOwner::Line(k));
@@ -942,18 +943,7 @@ impl Builder<'_> {
                 (self.net.leg_style(t, s), "l")
             }
         };
-        let dim = index.dim.map_or("?".into(), |d| d.to_string());
-        let text = match get(&attrs, "label")? {
-            Value::Math(s) => LabelText::Math(s.clone()),
-            Value::Str(s) => LabelText::Plain(s.clone()),
-            Value::Word(w) if w == "dim" => LabelText::Plain(dim),
-            Value::Word(w) if w == "name" => {
-                LabelText::Math(math_name(&index.name.base, &index.name.subscripts, index.prime))
-            }
-            Value::Word(_) if index.prime == 0 => LabelText::Plain(dim),
-            Value::Word(_) => LabelText::Math(format!("${dim}{}$", "'".repeat(index.prime as usize))),
-            _ => return None,
-        };
+        let text = label_text(get(&attrs, "label")?, index)?;
         let id = format!("{prefix}:{}", index_display(&index.name, index.prime));
         let (size, measured) = self.label_size(&id, text.as_str());
 
@@ -979,16 +969,7 @@ impl Builder<'_> {
             }
             (p, angle, Anchor::Center)
         } else {
-            let mut n = left(tangent);
-            match word(&attrs, "label-side") {
-                Some("left") => {}
-                Some("right") => n = -n,
-                _ => {
-                    if n.y < -1e-9 || (n.y.abs() <= 1e-9 && n.x > 0.0) {
-                        n = -n;
-                    }
-                }
-            }
+            let n = side(word(&attrs, "label-side"), tangent);
             let gap = self.length(&attrs, "label-distance", true).unwrap_or(0.15 * self.em());
             (p + n * (line.width / 2.0 + gap), 0.0, Anchor::Toward(-n))
         };
@@ -1004,5 +985,79 @@ impl Builder<'_> {
             size,
             measured,
         })
+    }
+
+    /// The labels at a line's ends (section 8.8): `start-label` near its
+    /// first tensor and, on a bond, `end-label` near its second, upright
+    /// beside the line and `end-label-inset` clear of the silhouette.
+    fn end_labels(&mut self, k: usize, line: &LineGeom) -> Vec<LabelGeom> {
+        let index = self.net.index(line.index);
+        let attrs = self.line_attrs(line);
+        let prefix = if line.kind == LineKind::Bond { "b" } else { "l" };
+        let (from, to) = line.visible;
+        let ends: &[(&str, f64, f64)] = if line.kind == LineKind::Bond {
+            &[("start-label", from, 1.0), ("end-label", to, -1.0)]
+        } else {
+            &[("start-label", from, 1.0)]
+        };
+        let mut out = Vec::new();
+        for (n, &(key, edge, inward)) in ends.iter().enumerate() {
+            let Some(text) = get(&attrs, key).and_then(|v| label_text(v, index)) else { continue };
+            let id = format!("{prefix}:{}@{}", index_display(&index.name, index.prime), n + 1);
+            let (size, measured) = self.label_size(&id, text.as_str());
+            let (_, tangent) = line.centerline.at(edge);
+            let choice = word(&attrs, "end-label-side").or_else(|| word(&attrs, "label-side"));
+            let normal = side(choice, tangent);
+            // Clear of the silhouette by the inset, whatever the line's
+            // direction: half the upright box's extent along the line.
+            let (w, h, d) = size;
+            let half = w / 2.0 * tangent.x.abs() + (h + d) / 2.0 * tangent.y.abs();
+            let inset = self.length(&attrs, "end-label-inset", true).unwrap_or(0.3 * self.em());
+            let s = (edge + inward * (inset + half)).clamp(from, to);
+            let gap = self.length(&attrs, "label-distance", true).unwrap_or(0.15 * self.em());
+            let p = line.centerline.at(s).0 + normal * (line.width / 2.0 + gap);
+            out.push(LabelGeom {
+                id,
+                owner: LabelOwner::Line(k),
+                on_line: false,
+                text,
+                pos: p,
+                angle: 0.0,
+                anchor: Anchor::Toward(-normal),
+                size,
+                measured,
+            });
+        }
+        out
+    }
+}
+
+/// A line label's text from its attribute value: text, or generated from
+/// the index (section 10.2).
+fn label_text(value: &Value, index: &crate::model::Index) -> Option<LabelText> {
+    let dim = index.dim.map_or("?".into(), |d| d.to_string());
+    Some(match value {
+        Value::Math(s) => LabelText::Math(s.clone()),
+        Value::Str(s) => LabelText::Plain(s.clone()),
+        Value::Word(w) if w == "dim" => LabelText::Plain(dim),
+        Value::Word(w) if w == "name" => {
+            LabelText::Math(math_name(&index.name.base, &index.name.subscripts, index.prime))
+        }
+        Value::Word(_) if index.prime == 0 => LabelText::Plain(dim),
+        Value::Word(_) => LabelText::Math(format!("${dim}{}$", "'".repeat(index.prime as usize))),
+        _ => return None,
+    })
+}
+
+/// The side of a line for a label beside it: `left` or `right` of its
+/// direction, or by default the side whose normal points up (left on a
+/// vertical line).
+fn side(choice: Option<&str>, tangent: V3) -> V3 {
+    let n = left(tangent);
+    match choice {
+        Some("left") => n,
+        Some("right") => -n,
+        _ if n.y < -1e-9 || (n.y.abs() <= 1e-9 && n.x > 0.0) => -n,
+        _ => n,
     }
 }

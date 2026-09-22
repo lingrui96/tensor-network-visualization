@@ -4,15 +4,17 @@ use super::ast::*;
 use super::lexer::{Tok, Token, lex};
 use crate::error::{Error, Pos, Result};
 use crate::model::{Dim, Direction, Relation};
-use crate::value::{Attr, parse_attrs};
+use crate::value::{Attr, parse_attrs, substitute};
 
 pub fn parse(src: &str) -> Result<Vec<Stmt>> {
-    Parser { toks: lex(src)?, i: 0 }.file()
+    Parser { toks: lex(src)?, i: 0, vars: Vec::new() }.file()
 }
 
 struct Parser {
     toks: Vec<Token>,
     i: usize,
+    /// `let` variables in order of declaration, with their values expanded.
+    vars: Vec<(String, String)>,
 }
 
 impl Parser {
@@ -92,6 +94,7 @@ impl Parser {
             Tok::Length(x, u) => format!("`{x}{u}`"),
             Tok::Dims(r, c) => format!("`{r}x{c}`"),
             Tok::Attrs(_) => "an attribute list".into(),
+            Tok::Raw(_) => "a value".into(),
             Tok::Sym(s) => format!("`{s}`"),
             Tok::Newline => "the end of the line".into(),
             Tok::Eof => "the end of the file".into(),
@@ -112,6 +115,13 @@ impl Parser {
             }
             if *self.peek() == Tok::Eof {
                 return Ok(stmts);
+            }
+            if self.is_ident("let") {
+                self.let_statement()?;
+                if !self.at_end() {
+                    return self.fail("expected the end of the statement");
+                }
+                continue;
             }
             let stmt = self.statement()?;
             // `3d, camera 35 25`: a comma may follow a scene statement.
@@ -361,10 +371,30 @@ impl Parser {
         Ok(self.attrs_maybe()?.unwrap_or_default())
     }
 
+    /// `let name = value`: a global variable, used as `@name` in attribute
+    /// values.  Its value is text, typed where it is used.
+    fn let_statement(&mut self) -> Result<()> {
+        self.advance();
+        let pos = self.pos();
+        let name = self.ident("a variable name")?;
+        self.expect_sym("=")?;
+        let raw = match self.advance() {
+            Tok::Raw(raw) => raw,
+            _ => return Err(Error::at(pos, "`let` needs a value after `=`")),
+        };
+        if self.vars.iter().any(|(n, _)| *n == name) {
+            return Err(Error::at(pos, format!("`@{name}` is already declared")));
+        }
+        let value = substitute(&raw, &self.vars).map_err(|m| Error::at(pos, m))?;
+        self.vars.push((name, value));
+        Ok(())
+    }
+
     fn attrs_maybe(&mut self) -> Result<Option<Vec<Attr>>> {
         if let Tok::Attrs(raw) = self.peek().clone() {
             let pos = self.pos();
             self.advance();
+            let raw = substitute(&raw, &self.vars).map_err(|m| Error::at(pos, m))?;
             Ok(Some(parse_attrs(&raw, pos)?))
         } else {
             Ok(None)

@@ -14,10 +14,10 @@
 % The LaTeX interface (tnvfigure, .tnvm) will do this; until then it can be
 % done by hand.
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesPackage{tnviz-runtime}[2026/09/22 v0.2 tnviz runtime, protocol 2]
+\ProvidesPackage{tnviz-runtime}[2026/09/22 v0.3 tnviz runtime, protocol 3]
 \RequirePackage{tikz}
 
-\def\tnv@protocol{2}
+\def\tnv@protocol{3}
 
 \newcommand{\tnvRuntime}[1]{%
   \ifnum#1=\tnv@protocol\relax\else
@@ -84,6 +84,12 @@
 }
 \newcommand{\tnvStroke}[4]{%
   \draw[color=#2, line width=#3, line cap=#4, line join=round] #1;%
+}
+
+% One object drawn at an opacity: a transparency group, so that its parts
+% fade together instead of showing through one another.
+\newcommand{\tnvGroup}[2]{%
+  \begin{scope}[transparency group, opacity=#1]#2\end{scope}%
 }
 
 \newcount\tnv@shading

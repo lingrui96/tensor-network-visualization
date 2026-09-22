@@ -221,3 +221,35 @@ fn checked_operations() {
     let text = to_tnv(&n);
     assert_eq!(to_tnv(&parse(&text).unwrap()), text);
 }
+
+#[test]
+fn global_variables() {
+    let n = net("let fresh = lime!55!green   // a comment\n\
+                 let pale = @fresh!60!white; let fade = .6\n\
+                 let chi = $\\chi$\n\
+                 chain A[1..2]\n\
+                 A[*] [color=@pale, opacity=@fade]\n\
+                 A[1] - A[2] [label=@chi]\n\
+                 A[2] [label=\"@fresh\"]\n");
+    let a1 = n.tensor_style(t(&n, "A", &[1]));
+    assert_eq!(attr(&a1, "color"), Some(&Value::Word("lime!55!green!60!white".into())));
+    assert_eq!(attr(&a1, "opacity"), Some(&Value::Number(0.6)));
+    // Inside a string, `@` is text.
+    let a2 = n.tensor_style(t(&n, "A", &[2]));
+    assert_eq!(attr(&a2, "label"), Some(&Value::Str("@fresh".into())));
+    let (bond, _) = n.bonds().next().unwrap();
+    assert_eq!(attr(&n.bond_style(bond), "label"), Some(&Value::Math("$\\chi$".into())));
+    // Canonical tnv has no variables: they are expanded.
+    let printed = to_tnv(&n);
+    assert!(!printed.contains('@') || printed.contains("\"@fresh\""), "{printed}");
+    assert!(printed.contains("lime!55!green!60!white"));
+
+    let err = |src: &str| parse(src).unwrap_err().to_string();
+    assert!(
+        err("A [color=@nope]\n").starts_with("1:3: unknown variable `@nope`"),
+        "{}",
+        err("A [color=@nope]\n")
+    );
+    assert!(err("let x = 1\nlet x = 2\n").contains("already declared"));
+    assert!(err("A [color=@x]\nlet x = red\n").contains("unknown variable"), "declared before use");
+}

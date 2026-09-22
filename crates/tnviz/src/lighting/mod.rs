@@ -82,6 +82,8 @@ pub struct TensorLook {
     pub face: Shading,
     pub outline: Stroke,
     pub shadow: Option<Shadow>,
+    /// The tensor's opacity, for its body, outline, and label together.
+    pub opacity: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -125,6 +127,9 @@ pub struct Lighting {
     pub lines: Vec<LineLook>,
     /// Each line's arrow, indexed like `Geometry::lines`.
     pub arrows: Vec<Option<ArrowLook>>,
+    /// Each line's opacity, for the line, its arrow, and its label
+    /// together; indexed like `Geometry::lines`.
+    pub line_opacity: Vec<f64>,
     /// Indexed like `Geometry::labels`.
     pub labels: Vec<LabelColour>,
 }
@@ -218,10 +223,12 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
                 Shape::Orb | Shape::Dot => orb(t, slot, light),
                 _ => glass_face(t, slot, light, hl, inset),
             };
+            let opacity = number(&attrs, "opacity").unwrap_or(1.0);
+            // A shadow is one fill: it fades by the same factor directly.
             let shadow = (word(&attrs, "shadow") != Some("off")).then(|| Shadow {
                 offset: V3::xy(-light.to_radians().cos(), -light.to_radians().sin()) * SHADOW_OFFSET,
                 colour: Colour::mix(slot, 0.6, Other::Black),
-                opacity: SHADOW_OPACITY,
+                opacity: SHADOW_OPACITY * opacity,
             });
             TensorLook {
                 face,
@@ -230,6 +237,7 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
                     width: TENSOR_OUTLINE_EM * em,
                 },
                 shadow,
+                opacity,
             }
         })
         .collect();
@@ -317,7 +325,12 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
         })
         .collect();
 
-    Lighting { slots: slots.0, tensors, lines, arrows, labels }
+    let line_opacity = geom
+        .lines
+        .iter()
+        .map(|l| number(&line_attrs(net, l.kind, l.index), "opacity").unwrap_or(1.0))
+        .collect();
+    Lighting { slots: slots.0, tensors, lines, arrows, line_opacity, labels }
 }
 
 fn line_attrs(net: &Network, kind: LineKind, index: crate::model::IndexId) -> Vec<Attr> {

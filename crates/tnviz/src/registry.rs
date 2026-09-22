@@ -64,6 +64,7 @@ const T: &[Target] = &[Tensor];
 const B: &[Target] = &[Bond];
 const L: &[Target] = &[Leg];
 const BL: &[Target] = &[Bond, Leg];
+const TBL: &[Target] = &[Tensor, Bond, Leg];
 
 const SPECS: &[Spec] = &[
     // Tensors.
@@ -83,6 +84,7 @@ const SPECS: &[Spec] = &[
     Spec { key: "highlight-size", targets: T, category: Appearance, kind: Number },
     Spec { key: "highlight-inset", targets: T, category: Appearance, kind: Length },
     Spec { key: "shadow", targets: T, category: Appearance, kind: Word(&["on", "off"]) },
+    Spec { key: "opacity", targets: TBL, category: Appearance, kind: Fraction },
     Spec { key: "z", targets: &[Tensor, Bond], category: Order, kind: Number },
     Spec { key: "label-color", targets: &[Tensor, Bond, Leg], category: Appearance, kind: ColourOrAuto },
     Spec { key: "label-font", targets: &[Tensor, Bond, Leg], category: Appearance, kind: Font },
@@ -116,6 +118,10 @@ const SPECS: &[Spec] = &[
     Spec { key: "label-offset", targets: BL, category: Geometry, kind: Length },
     Spec { key: "label-shift", targets: BL, category: Geometry, kind: Point },
     Spec { key: "label-distance", targets: BL, category: Geometry, kind: EmLength },
+    Spec { key: "start-label", targets: BL, category: Appearance, kind: LabelText },
+    Spec { key: "end-label", targets: B, category: Appearance, kind: LabelText },
+    Spec { key: "end-label-inset", targets: BL, category: Geometry, kind: EmLength },
+    Spec { key: "end-label-side", targets: BL, category: Geometry, kind: Word(&["auto", "left", "right"]) },
 ];
 
 /// Label text for bonds and legs, besides literal text.

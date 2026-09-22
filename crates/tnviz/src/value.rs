@@ -111,6 +111,44 @@ pub(crate) fn write_attrs(f: &mut impl fmt::Write, attrs: &[Attr]) -> fmt::Resul
 
 /// Parse the text between the brackets of an attribute list.  `pos` is the
 /// position of the opening bracket, for error messages.
+/// Replace every `@name` outside strings and math by the value of the
+/// variable `name`.
+pub fn substitute(raw: &str, vars: &[(String, String)]) -> std::result::Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    let (mut quote, mut math) = (false, false);
+    let mut it = raw.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        match c {
+            '"' if !math => quote = !quote,
+            '$' if !quote => math = !math,
+            '@' if !quote && !math => {
+                let start = i + 1;
+                let mut end = start;
+                while let Some(&(j, d)) = it.peek() {
+                    if d.is_ascii_alphanumeric() || d == '_' {
+                        end = j + d.len_utf8();
+                        it.next();
+                    } else {
+                        break;
+                    }
+                }
+                let name = &raw[start..end];
+                if name.is_empty() {
+                    return Err("`@` must be followed by a variable name".into());
+                }
+                let (_, value) = vars.iter().find(|(n, _)| n == name).ok_or_else(|| {
+                    format!("unknown variable `@{name}`; declare it first with `let {name} = …`")
+                })?;
+                out.push_str(value);
+                continue;
+            }
+            _ => {}
+        }
+        out.push(c);
+    }
+    Ok(out)
+}
+
 pub fn parse_attrs(raw: &str, pos: Pos) -> Result<Vec<Attr>> {
     let mut attrs: Vec<Attr> = Vec::new();
     for item in split_top_level(raw).map_err(|m| Error::at(pos, m))? {

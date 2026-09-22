@@ -15,7 +15,7 @@ use crate::registry::get;
 use crate::value::Value;
 
 /// The protocol version written by `\tnvRuntime`.
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 /// A figure as runtime-protocol TeX code, to be input inside its
 /// `tikzpicture`.  `fragments` must come from [`crate::order`] and
@@ -45,10 +45,35 @@ pub fn tikz(
     for (k, expr) in lighting.slots.iter().enumerate() {
         let _ = writeln!(s, "\\tnvColor{{{k}}}{{{expr}}}%");
     }
-    for f in fragments {
-        w.fragment(&mut s, f.part);
+    // Consecutive fragments of one object that is not opaque form one
+    // transparency group, so that its parts fade together.
+    let mut k = 0;
+    while k < fragments.len() {
+        let (object, opacity) = w.object(fragments[k].part);
+        let mut end = k + 1;
+        while end < fragments.len() && w.object(fragments[end].part).0 == object {
+            end += 1;
+        }
+        let mut body = String::new();
+        for f in &fragments[k..end] {
+            w.fragment(&mut body, f.part);
+        }
+        if opacity < 1.0 - 1e-9 {
+            let _ = write!(s, "\\tnvGroup{{{}}}{{%\n{body}}}%\n", num(opacity));
+        } else {
+            s += &body;
+        }
+        k = end;
     }
     s
+}
+
+/// What a fragment belongs to, for grouping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Object {
+    Shadow(crate::model::TensorId),
+    Tensor(crate::model::TensorId),
+    Line(usize),
 }
 
 struct Writer<'a> {
@@ -59,6 +84,22 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
+    /// The object of a fragment and its opacity.  A shadow's opacity is in
+    /// its fill already.
+    fn object(&self, part: Part) -> (Object, f64) {
+        let tensor = |t| (Object::Tensor(t), self.lighting.tensors[self.tensor_index(t)].opacity);
+        let line = |k: usize| (Object::Line(k), self.lighting.line_opacity[k]);
+        match part {
+            Part::TensorShadow(t) => (Object::Shadow(t), 1.0),
+            Part::Tensor(t) => tensor(t),
+            Part::Line(k) | Part::Arrow(k) => line(k),
+            Part::Label(k) => match self.geom.labels[k].owner {
+                LabelOwner::Tensor(t) => tensor(t),
+                LabelOwner::Line(l) => line(l),
+            },
+        }
+    }
+
     fn fragment(&self, s: &mut String, part: Part) {
         match part {
             Part::TensorShadow(t) => {
@@ -292,7 +333,7 @@ mod tests {
     fn a_figure_in_protocol_order() {
         let s = figure("A at (0, 0)\nB at (3, 0)\nA - B [style=tube, label=\"k_1 & 50%\"]\n");
         let lines: Vec<&str> = s.lines().collect();
-        assert_eq!(lines[0], "\\tnvRuntime{2}%");
+        assert_eq!(lines[0], "\\tnvRuntime{3}%");
         let src = "A at (0, 0)\nB at (3, 0)\nA - B [style=tube, label=\"k_1 & 50%\"]\n";
         assert_eq!(
             lines[1],
@@ -325,6 +366,21 @@ mod tests {
         assert_eq!(num(1e-9), "0");
         let s = figure("A at (0, 0)\nA [shape=orb, label=none, shadow=off]\n");
         assert!(s.contains("arc[start angle=0, delta angle=360, radius=0.4] -- cycle"), "{s}");
+    }
+
+    #[test]
+    fn translucent_objects_are_groups() {
+        let s = figure("A at (0, 0)\nB at (3, 0)\nA - B [opacity=.4, arrow=forward]\nA [opacity=.5]\n");
+        // A's body, outline, and label in one group; its shadow faded directly.
+        let group = s.split("\\tnvGroup{0.5}{%\n").nth(1).expect("a group for A");
+        let group = &group[..group.find("\n}%\n").expect("the group's end")];
+        assert!(group.contains("\\tnvShade") && group.contains("\\tnvStroke") && group.contains("{$A$}%"));
+        assert!(s.contains("}{0.06}%"), "the shadow fades by .5: {s}");
+        // The bond and its arrow together.
+        let bond = s.split("\\tnvGroup{0.4}{%\n").nth(1).expect("a group for the bond");
+        assert!(bond.starts_with("\\tnvStroke") && bond.contains("\\tnvFill"));
+        // B is opaque: no group.
+        assert_eq!(s.matches("\\tnvGroup").count(), 2);
     }
 
     #[test]

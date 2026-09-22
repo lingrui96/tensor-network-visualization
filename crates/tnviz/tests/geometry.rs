@@ -291,3 +291,28 @@ fn a_label_lies_over_a_shaft() {
     let k = g.labels.iter().position(|l| l.on_line).unwrap();
     assert!(at(tnviz::Part::Arrow(0)) < at(tnviz::Part::Label(k)));
 }
+
+#[test]
+fn labels_at_the_ends_of_a_bond() {
+    let mut sizes = LabelSizes::new();
+    sizes.insert("b:k@1", 5.0, 4.0, 0.0);
+    let (_, g) = build_with(
+        "tensor A (k)\ntensor B (k)\nA at (0, 0)\nB at (4, 0)\nk [start-label=$i$, end-label=name]\n",
+        &sizes,
+    );
+    let (from, to) = g.lines[0].visible;
+    let at =
+        |id: &str| g.labels.iter().find(|l| l.id == id).unwrap_or_else(|| panic!("no {id}: {:?}", g.labels));
+    let (start, end) = (at("b:k@1"), at("b:k@2"));
+    // .3em clear of the silhouettes, beside the bond on its upper side.
+    let em = 10.0 / 28.45274;
+    assert!(close(start.pos.x, from + 0.3 * em + start.size.0 / 2.0));
+    assert!(close(end.pos.x, to - 0.3 * em - end.size.0 / 2.0));
+    assert!(start.pos.y > 0.0 && end.pos.y > 0.0 && !start.on_line);
+    assert_eq!(end.text, tnviz::LabelText::Math("$k$".into()));
+
+    // A leg has one end, and `end-label` is for bonds only.
+    let (_, g) = build("A: leg down\nleg [start-label=$s$]\n");
+    assert_eq!(g.labels.iter().filter(|l| l.id.ends_with("@1")).count(), 1);
+    assert!(tnviz::parse("A: leg down\nleg [end-label=$s$]\n").is_err());
+}

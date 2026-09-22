@@ -210,7 +210,31 @@ tag:Site     [leg-length=.6]          // by tag
 
 Math labels may be written as `$\chi$` without quotes.
 
-### 6.5 Examples
+### 6.5 Variables
+
+```
+let fresh = lime!55!green!75!black!55!white
+let pale  = @fresh!60!white             // a variable may use earlier ones
+let fade  = .6; let chi = $\chi$
+
+A[*]         [color=@fresh, opacity=@fade]
+A[3] - A[4]  [label=@chi]
+leg          [color=@pale]
+```
+
+- `let name = value` declares a global variable.  The value is the rest of
+  the statement as written, up to a `;`, a `//` comment, or the end of the
+  line.
+- `@name` in an attribute value stands for that text, anywhere in the value,
+  so it can be part of a colour expression.  The value is then read as the
+  attribute's type, as if it had been written there; one variable can serve
+  attributes of different types.  `@` inside a string or math is text.
+- A variable is declared once, before it is used.  There are no local
+  variables: every variable is global.
+- The canonical form (section 3, principle 7) has no variables; they are
+  expanded.
+
+### 6.6 Examples
 
 **MPS**
 ```
@@ -445,6 +469,14 @@ on its piece, is left alone with a warning.
     plus depth fits the tube's diameter, and `beside` otherwise; a label on a
     line is `beside`.  Only an explicit `on` that does not fit warns.
 - **Open-leg labels** follow the bond-label rules along the leg.
+- **End labels** name a line's index where it meets a tensor, as in
+  `- [start-label=name, end-label=name]`.  `start-label` sits near a bond's
+  first tensor (or a leg's tensor) and `end-label` near a bond's second
+  one; their values are those of `label`.  Each is upright, beside the line
+  as for `label-placement=beside`, on the side given by `end-label-side`
+  (default: `label-side`), and along the line just clear of the
+  silhouette: its box's extent along the line is `end-label-inset` from
+  the end of the visible part.
 
 ### 8.9 Drawing order
 
@@ -458,7 +490,15 @@ order, lower first:
 - order: the source order.
 
 Tensors therefore cover the ends of their bonds, and their shadows fall on
-bonds.  Labels printed on a tube belong to the tube; labels beside bonds are
+bonds.
+
+**Opacity.**  `opacity` fades one object as a whole: a tensor with its
+outline and label, or a line with its arrow and the label printed on it.
+Its parts are composed first and then faded together, so they do not show
+through one another; what lies behind the object shows through it,
+including the ends of its bonds, which run to the tensor's centre.  A
+tensor's shadow fades by the same factor, and a label beside a line fades
+with the line.  Labels printed on a tube belong to the tube; labels beside bonds are
 in the overlay pass.
 
 ### 8.10 Lighting
@@ -607,6 +647,7 @@ Unknown attributes, and values of the wrong type, are errors.
 | `highlight-size` | appearance | number | `.66` | lighting model |
 | `highlight-inset` | appearance | length | `0` | lighting model |
 | `shadow` | appearance | `on`, `off` | `on` | lighting model |
+| `opacity` | appearance | number in [0, 1] | `1` | lighting model, backend |
 | `z` | order | number | `0` | order |
 
 **Bonds and open legs**
@@ -629,6 +670,7 @@ Unknown attributes, and values of the wrong type, are errors.
 | `arrow-style` | bonds, legs | geometry | `head`, `shaft`, `beside`, `cone` | line `head`, tube `cone` | geometry |
 | `arrow-size` | bonds, legs | geometry | number | `1` | geometry |
 | `layer` | bonds | order | `back`, `front` | `back` | order |
+| `opacity` | bonds, legs | appearance | number in [0, 1] | `1` | lighting model, backend |
 | `z` | bonds | order | number | `0` | order |
 | `leg-dir` | legs, bond ends | layout | direction | section 7.3 | layout |
 | `leg-length` | legs | geometry | length | `.6` | geometry |
@@ -641,6 +683,10 @@ Unknown attributes, and values of the wrong type, are errors.
 | `label-shift` | bonds, legs | geometry | a point | `(0, 0)` | geometry |
 | `label-distance` | bonds, legs | geometry | length (`em`) | `.15em` | geometry |
 | `label-font` | bonds, legs | appearance | backend font | the backend's | backend |
+| `start-label` | bonds, legs | appearance | text, `dim`, `name`, `dim+prime` | none | backend |
+| `end-label` | bonds | appearance | text, `dim`, `name`, `dim+prime` | none | backend |
+| `end-label-inset` | bonds, legs | geometry | length (`em`) | `.3em` | geometry |
+| `end-label-side` | bonds, legs | geometry | `auto`, `left`, `right` | `label-side` | geometry |
 | `label-color` | bonds, legs | appearance | colour, or `auto` | `auto` | lighting model |
 
 Where a default refers to `width`, it means the tube diameter, or 0 for a line.
