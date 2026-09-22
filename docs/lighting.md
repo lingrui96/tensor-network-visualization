@@ -158,6 +158,6 @@ and the backend applies it once the RGB is known (`\tnvAutoColor`).
 
 ## 6. Origin
 
-The formulas come from the frozen TeX prototype (`tex/tnviz.sty`).  They are
+The formulas come from the frozen TeX prototype (`tex/prototype/tnviz.sty`).  They are
 now computed by the engine, so the prototype's TeX-side PostScript builder
 (audit T4) and colour derivations (T7) are no longer needed.

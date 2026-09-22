@@ -148,8 +148,36 @@ cargo run -p tnviz-cli -- layout examples/tnv/sandwich.tnv --svg layout.svg
 cargo run -p tnviz-cli -- tikz examples/tnv/sandwich.tnv -o sandwich.tikz
 ```
 
-A `.tikz` file is drawn with the runtime, inside a picture whose unit is one
-layout unit:
+## LaTeX
+
+`tex/tnviz.sty` puts tnv figures in a document:
+
+```latex
+\usepackage{tnviz}
+...
+\begin{tnvfigure}[name=mps, unit=1cm]
+chain A[1..6]
+A[*]: leg down
+\end{tnvfigure}
+
+\tnvinput[unit=8mm]{figures/peps.tnv}
+```
+
+Options go on the `\begin` line.  `\tnvset{unit=8mm}` sets defaults.  The
+workflow is the same as for BibTeX:
+
+```sh
+pdflatex paper      # writes paper.tnvm and the figures' .tnv files
+tnviz tex paper     # writes paper-<figure>.tikz
+pdflatex paper      # draws the figures and measures their labels
+```
+
+If LaTeX warns "Label sizes changed; rerun tnviz", run `tnviz tex` and LaTeX
+once more.  Run `tnviz tex` again after changing a figure.  `make paper`
+runs `examples/paper.tex` through the whole cycle into `.preview/paper/`.
+
+A single `.tikz` file from `tnviz tikz` can also be drawn by hand with the
+runtime, inside a picture whose unit is one layout unit:
 
 ```latex
 \usepackage{tnviz-runtime}
@@ -162,8 +190,10 @@ through the library's `debug-svg` feature, and `make geometry-preview` draws
 every file in `examples/tnv/` into `.preview/`.  The debug SVG draws flat
 shapes, without the drawing order or the lighting model.  `make
 runtime-preview` draws every example through the TikZ backend and the
-runtime into `.preview/runtime/`.  Label sizes are still estimated: the
-LaTeX interface that measures them (`.tnvm`) is not written yet.
+runtime into `.preview/runtime/`, with estimated label sizes.
+
+The prototype package that preceded the engine is frozen in
+`tex/prototype/tnviz.sty`; `make preview` renders its examples.
 
 Build locally viewable, ignored effect images with:
 

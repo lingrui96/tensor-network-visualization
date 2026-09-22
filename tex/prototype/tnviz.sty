@@ -1,0 +1,1672 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{tnviz}[2026/09/22 v0.1.0 2D tensor-network glyph primitives]
+
+\RequirePackage{tikz}
+\RequirePackage{xfp}
+
+\makeatletter
+
+% The package intentionally begins with visual primitives only.  A shape is
+% selected independently from any tensor-network semantics, so future glyphs
+% can implement the same local geometry contract without changing callers.
+\pgfkeys{
+  /tnv/.is family,
+  /tnv,
+  shape/.store in=\tnv@shape,
+  color/.store in=\tnv@color,
+  width/.store in=\tnv@width,
+  height/.store in=\tnv@height,
+  corner radius/.store in=\tnv@corner,
+  rotation/.store in=\tnv@rotation,
+  line width/.store in=\tnv@linewidth,
+  light angle/.store in=\tnv@lightangle,
+  highlight size/.store in=\tnv@highlightsize,
+  highlight inset/.store in=\tnv@highlightinset,
+  z/.store in=\tnv@z,
+  shadow offset/.store in=\tnv@shadowoffset,
+  shadow opacity/.store in=\tnv@shadowopacity,
+  font/.store in=\tnv@font,
+  text color/.store in=\tnv@textcolor,
+}
+
+\newenvironment{tnvdiagram}[1][]{%
+  \begin{tikzpicture}[baseline=(current bounding box.center),#1]%
+}{%
+  \end{tikzpicture}%
+}
+
+\newcommand{\tnv@preparestyle}{%
+  \pgfmathsetlengthmacro{\tnv@halfwidth}{0.5*\tnv@width}
+  \pgfmathsetlengthmacro{\tnv@halfheight}{0.5*\tnv@height}
+  \pgfmathsetlengthmacro{\tnv@radius}{0.5*\tnv@width}
+  % One public colour is enough.  Gray bases stay gray, while coloured bases
+  % derive their own restrained glass highlights, rims, and shadows.
+  \colorlet{tnv@base}{\tnv@color}
+  \colorlet{tnv@glasslight}{tnv@base!80!white}
+  \colorlet{tnv@glassdeep}{tnv@base!78!black}
+  \colorlet{tnv@shadow}{tnv@base!60!black}
+  \colorlet{tnv@outline}{tnv@base!76!black}
+  \colorlet{tnv@specular}{tnv@base!6!white}
+  \colorlet{tnv@backrim}{tnv@base!35!black}
+  % The physical light stays fixed in page space even when a glyph rotates.
+  \pgfmathsetmacro{\tnv@locallightangle}{\tnv@lightangle-\tnv@rotation}
+  \pgfmathsetmacro{\tnv@localshadowangle}{\tnv@locallightangle+180}
+  \pgfmathsetlengthmacro{\tnv@shadowx}{\tnv@shadowoffset*cos(\tnv@localshadowangle)}
+  \pgfmathsetlengthmacro{\tnv@shadowy}{\tnv@shadowoffset*sin(\tnv@localshadowangle)}
+}
+
+% ---------------------------------------------------------------------------
+% Rounded convex polygons
+%
+% A polygon is declared by its vertices in counter-clockwise local order.
+% From them the package derives, per edge, the unit direction and outward
+% normal angle and, per vertex, the fillet: turning angle, tangent point, and
+% arc centre.  The same data draws the silhouette and drives the lighting, so
+% the reflection follows the actual contour (and its aspect ratio) exactly.
+% All stored values are plain numbers in pt.
+% ---------------------------------------------------------------------------
+
+\def\tnv@get#1#2{\csname tnv@#1@#2\endcsname}
+\def\tnv@gset#1#2#3{\expandafter\xdef\csname tnv@#1@#2\endcsname{#3}}
+% Evaluate #3 with pgfmath before storing it.
+\def\tnv@gsetm#1#2#3{\pgfmathsetmacro{\tnv@tmp}{#3}\tnv@gset{#1}{#2}{\tnv@tmp}}
+
+\newcommand{\tnv@beginpolygon}{\gdef\tnv@n{0}}
+\newcommand{\tnv@vertex}[2]{%
+  \pgfmathsetmacro{\tnv@tmpx}{#1}%
+  \pgfmathsetmacro{\tnv@tmpy}{#2}%
+  \tnv@gset{vx}{\tnv@n}{\tnv@tmpx}%
+  \tnv@gset{vy}{\tnv@n}{\tnv@tmpy}%
+  \pgfmathtruncatemacro{\tnv@tmpn}{\tnv@n+1}%
+  \global\let\tnv@n\tnv@tmpn
+}
+
+\newcommand{\tnv@endpolygon}{%
+  \pgfmathtruncatemacro{\tnv@last}{\tnv@n-1}%
+  % Edge i runs from vertex i to vertex i+1.
+  \foreach \i in {0,...,\tnv@last}{%
+    \pgfmathtruncatemacro{\j}{mod(\i+1,\tnv@n)}%
+    \pgfmathsetmacro{\tnv@dx}{\tnv@get{vx}{\j}-\tnv@get{vx}{\i}}%
+    \pgfmathsetmacro{\tnv@dy}{\tnv@get{vy}{\j}-\tnv@get{vy}{\i}}%
+    \pgfmathsetmacro{\tnv@len}{veclen(\tnv@dx,\tnv@dy)}%
+    \tnv@gset{len}{\i}{\tnv@len}%
+    \tnv@gsetm{ex}{\i}{\tnv@dx/\tnv@len}%
+    \tnv@gsetm{ey}{\i}{\tnv@dy/\tnv@len}%
+    % Counter-clockwise order puts the outward normal on the right.
+    \pgfmathsetmacro{\tnv@nang}{mod(atan2(-\tnv@dx,\tnv@dy)+360,360)}%
+    \tnv@gset{nang}{\i}{\tnv@nang}%
+  }%
+  % The fillet radius is clamped so that no fillet consumes more than half of
+  % an adjacent edge.
+  \pgfmathsetmacro{\tnv@r}{\tnv@corner}%
+  \foreach \i in {0,...,\tnv@last}{%
+    \pgfmathtruncatemacro{\h}{mod(\i+\tnv@n-1,\tnv@n)}%
+    \pgfmathsetmacro{\tnv@turn}{mod(\tnv@get{nang}{\i}-\tnv@get{nang}{\h}+360,360)}%
+    \tnv@gset{turn}{\i}{\tnv@turn}%
+    \pgfmathsetmacro{\tnv@rmax}{.5*min(\tnv@get{len}{\h},\tnv@get{len}{\i})/tan(\tnv@turn/2)}%
+    \pgfmathsetmacro{\tnv@r}{min(\tnv@r,\tnv@rmax)}%
+    \global\let\tnv@r\tnv@r
+  }%
+  \global\let\tnv@filletr\tnv@r
+  \gdef\tnv@glyphpath{}%
+  \foreach \i in {0,...,\tnv@last}{%
+    \pgfmathtruncatemacro{\h}{mod(\i+\tnv@n-1,\tnv@n)}%
+    \pgfmathsetmacro{\tnv@t}{\tnv@filletr*tan(\tnv@get{turn}{\i}/2)}%
+    \tnv@gset{tl}{\i}{\tnv@t}%
+    \pgfmathsetmacro{\tnv@inx}{\tnv@get{vx}{\i}-\tnv@t*\tnv@get{ex}{\h}}%
+    \pgfmathsetmacro{\tnv@iny}{\tnv@get{vy}{\i}-\tnv@t*\tnv@get{ey}{\h}}%
+    % The fillet centre lies one radius inside the incoming tangent point.
+    \tnv@gsetm{cx}{\i}{\tnv@inx-\tnv@filletr*cos(\tnv@get{nang}{\h})}%
+    \tnv@gsetm{cy}{\i}{\tnv@iny-\tnv@filletr*sin(\tnv@get{nang}{\h})}%
+    \ifdim\tnv@filletr pt>0.01pt
+      \xdef\tnv@glyphpath{\tnv@glyphpath
+        (\tnv@inx pt,\tnv@iny pt)
+        arc[start angle=\tnv@get{nang}{\h},delta angle=\tnv@get{turn}{\i},radius=\tnv@filletr pt] --}%
+    \else
+      \xdef\tnv@glyphpath{\tnv@glyphpath (\tnv@inx pt,\tnv@iny pt) --}%
+    \fi
+  }%
+  \xdef\tnv@glyphpath{\tnv@glyphpath cycle}%
+}
+
+% ---------------------------------------------------------------------------
+% Normal-driven lighting
+%
+% The whole face is one PDF functional shading evaluated per point, so the
+% rims are true continuous gradients rather than stacked or tiled pieces.
+% For a point p inside the glyph the function finds the nearest point of the
+% rounded contour: inside a fillet wedge it lies radially from the fillet
+% centre; elsewhere it lies on the edge whose line is closest.  This gives the
+% depth below the contour and the local outward normal, which bends
+% continuously around every fillet.  The world light direction is fixed; the
+% local normal is converted to page space by adding the glyph rotation.
+% Facing surfaces receive a narrow specular rim, intensity max(0,n.L)^2;
+% facing-away surfaces receive a darkening rim, intensity max(0,-n.L).
+% ---------------------------------------------------------------------------
+
+\newcount\tnv@faceid
+\def\tnv@fanscale{2.0}
+
+% Build the PostScript calculator code mapping (x y) in local pt to
+% (theta depth) into \tnv@geometrycode.
+\newcommand{\tnv@buildgeometrycode}{%
+  % Away from the fillet wedges, the depth follows the lines of the
+  % fillet-centre polygon K: s_i = n_i.p - k_i, depth = r - max s_i.  Both
+  % the maximising edge's normal and this depth have a ridge along the angle
+  % bisectors inside K, which would crease the lighting.  Instead each edge
+  % gets the weight exp((s_i - max s)/beta), beta = \tnv@fanscale D, where
+  % D = max(0, -max s) is the depth inside K.  The normal is the weighted sum
+  % of edge normals and the depth is r minus the weighted mean of s_i.  The
+  % max cancels in both, so they are smooth across the bisectors.  On K's
+  % boundary D vanishes and a single edge counts, matching the exact
+  % geometry outside K; deeper in, the normal fans smoothly around each
+  % corner and the mean only increases the depth.
+  \gdef\tnv@maxcode{}%
+  \gdef\tnv@blendcode{}%
+  \foreach \i in {0,...,\tnv@last}{%
+    \pgfmathsetmacro{\tnv@nx}{cos(\tnv@get{nang}{\i})}%
+    \pgfmathsetmacro{\tnv@ny}{sin(\tnv@get{nang}{\i})}%
+    \pgfmathsetmacro{\tnv@k}{\tnv@nx*\tnv@get{vx}{\i}+\tnv@ny*\tnv@get{vy}{\i}-\tnv@filletr}%
+    \ifnum\i=0
+      \xdef\tnv@maxcode{1 index \tnv@nx\space mul 1 index \tnv@ny\space mul add
+        \tnv@k\space sub}%
+    \else
+      \xdef\tnv@maxcode{\tnv@maxcode\space
+        2 index \tnv@nx\space mul 2 index \tnv@ny\space mul add
+        \tnv@k\space sub 2 copy lt {exch} if pop}%
+    \fi
+    % Stack: x y smax beta NX NY W S.
+    \xdef\tnv@blendcode{\tnv@blendcode\space
+      7 index \tnv@nx\space mul 7 index \tnv@ny\space mul add \tnv@k\space sub
+      dup 7 index sub 6 index div 2.71828 exch exp
+      dup 3 -1 roll mul 3 -1 roll add exch
+      dup 4 -1 roll add exch
+      dup \tnv@ny\space mul 5 -1 roll add
+      exch \tnv@nx\space mul 5 -1 roll add
+      4 -1 roll 4 -1 roll exch 4 -1 roll 4 -1 roll exch 4 2 roll}%
+  }%
+  \xdef\tnv@geometrycode{\tnv@maxcode\space
+    dup neg dup 0 lt {pop 0} if \tnv@fanscale\space mul .0001 add
+    0 0 0 0 \tnv@blendcode\space
+    exch div 3 1 roll exch atan 4 1 roll 3 1 roll pop pop
+    \tnv@filletr\space exch sub 4 2 roll pop pop}%
+  % Fillet wedges wrap the edge branch as an if/else chain.
+  \ifdim\tnv@filletr pt>0.01pt
+    \foreach \i in {0,...,\tnv@last}{%
+      \pgfmathtruncatemacro{\h}{mod(\i+\tnv@n-1,\tnv@n)}%
+      \edef\tnv@cx{\tnv@get{cx}{\i}}%
+      \edef\tnv@cy{\tnv@get{cy}{\i}}%
+      \xdef\tnv@geometrycode{%
+        1 index \tnv@cx\space sub \tnv@get{ex}{\h}\space mul
+        1 index \tnv@cy\space sub \tnv@get{ey}{\h}\space mul add 0 gt
+        2 index \tnv@cx\space sub \tnv@get{ex}{\i}\space mul
+        2 index \tnv@cy\space sub \tnv@get{ey}{\i}\space mul add 0 lt and
+        {\tnv@cy\space sub exch \tnv@cx\space sub
+         2 copy dup mul exch dup mul add sqrt
+         \tnv@filletr\space exch sub 3 1 roll atan exch}
+        {\tnv@geometrycode} ifelse}%
+    }%
+  \fi
+}
+
+% Store "r,g,b" as \tnv@<#1>r, \tnv@<#1>g, \tnv@<#1>b.
+\def\tnv@rgbwords#1#2,#3,#4\relax{%
+  \expandafter\def\csname tnv@#1r\endcsname{#2}%
+  \expandafter\def\csname tnv@#1g\endcsname{#3}%
+  \expandafter\def\csname tnv@#1b\endcsname{#4}%
+}
+% Store the rgb components of colour #1 under the prefix #2.
+\newcommand{\tnv@rgbof}[2]{%
+  \extractcolorspecs{#1}{\tnv@model}{\tnv@spec}%
+  \convertcolorspec{\tnv@model}{\tnv@spec}{rgb}\tnv@rgb
+  \edef\tnv@tmp{\noexpand\tnv@rgbwords{#2}\tnv@rgb\relax}\tnv@tmp
+}
+
+% PostScript code consuming (as ab g) and pushing channel #1 (r, g, or b):
+% body = deep + (light-deep) g, then the specular rim (opacity as) and the
+% back rim (opacity ab) are composited over it.
+\newcommand{\tnv@channelcode}[1]{%
+  \pgfmathsetmacro{\tnv@span}{\csname tnv@light#1\endcsname-\csname tnv@deep#1\endcsname}%
+  \edef\tnv@code{\tnv@code\space
+    \tnv@span\space mul \csname tnv@deep#1\endcsname\space add
+    2 index 1 exch sub mul 2 index \csname tnv@spec#1\endcsname\space mul add
+    1 index 1 exch sub mul exch \csname tnv@back#1\endcsname\space mul add exch pop}%
+}
+
+% Smooth depth falloff: 1 at the contour, 0 at depth #1 (pt), smoothstep.
+\def\tnv@rampcode#1{%
+  #1 div 1 exch sub dup 0 lt {pop 0} if dup 1 gt {pop 1} if
+  dup dup mul exch 2 mul 3 exch sub mul}
+
+% The glass face is one functional shading: every point is evaluated from
+% its position, so the directional body gradient and both rims are exact
+% continuous gradients along and across the contour.
+\newcommand{\tnv@glassface}{%
+  \pgfmathsetmacro{\tnv@hlscale}{\tnv@highlightsize/.22}%
+  % Depth of the specular peak below the contour (pt).
+  \pgfmathsetmacro{\tnv@inset}{\tnv@highlightinset}%
+  % Narrow rims; a larger fillet gives a slightly broader, gentler turn.
+  \pgfmathsetmacro{\tnv@specwidth}{\tnv@hlscale*(1.60+.18*\tnv@filletr)}%
+  \pgfmathsetmacro{\tnv@backwidth}{1.8*\tnv@specwidth}%
+  \pgfmathsetmacro{\tnv@phase}{\tnv@rotation-\tnv@lightangle}%
+  \pgfmathsetmacro{\tnv@lx}{cos(\tnv@locallightangle)}%
+  \pgfmathsetmacro{\tnv@ly}{sin(\tnv@locallightangle)}%
+  % Half-extent of the glyph along the light direction.
+  \pgfmathsetmacro{\tnv@lightextent}{abs(\tnv@lx)*\tnv@halfwidth+abs(\tnv@ly)*\tnv@halfheight}%
+  \pgfmathsetmacro{\tnv@extent}{\tnv@halfwidth+\tnv@halfheight+4pt}%
+  \tnv@buildgeometrycode
+  \tnv@rgbof{tnv@glassdeep}{deep}%
+  \tnv@rgbof{tnv@glasslight}{light}%
+  \tnv@rgbof{tnv@specular}{spec}%
+  \tnv@rgbof{tnv@backrim}{back}%
+  % Stack after the geometry: x y theta depth.
+  \edef\tnv@code{%
+    1.00375 mul exch 1.00375 mul exch 2 copy
+    \tnv@geometrycode\space
+    1 index \tnv@phase\space add cos
+    1 index \tnv@inset\space sub abs \tnv@rampcode{\tnv@specwidth}
+    1 index dup 0 lt {pop 0} if dup mul mul .88 mul
+    2 index \tnv@rampcode{\tnv@backwidth}
+    2 index neg dup 0 lt {pop 0} if mul .46 mul
+    6 index \tnv@lx\space mul 6 index \tnv@ly\space mul add
+    \tnv@lightextent\space div .5 mul .5 add
+    dup 0 lt {pop 0} if dup 1 gt {pop 1} if
+    8 3 roll pop pop pop pop pop
+    2 index 2 index 2 index}%
+  \tnv@channelcode{r}%
+  \edef\tnv@code{\tnv@code\space 3 index 3 index 3 index}%
+  \tnv@channelcode{g}%
+  \edef\tnv@code{\tnv@code\space 4 index 4 index 4 index}%
+  \tnv@channelcode{b}%
+  \edef\tnv@code{\tnv@code\space 6 3 roll pop pop pop}%
+  \global\advance\tnv@faceid by 1
+  \edef\tnv@facename{tnv face \the\tnv@faceid}%
+  % Shading coordinates are bp; the function converts them to local pt.
+  \pgfdeclarefunctionalshading{\tnv@facename}%
+    {\pgfpoint{-\tnv@extent bp}{-\tnv@extent bp}}%
+    {\pgfpoint{\tnv@extent bp}{\tnv@extent bp}}{}{\tnv@code}%
+  \begin{scope}
+    \clip \tnv@glyphpath;
+    \pgfuseshading{\tnv@facename}%
+  \end{scope}%
+}
+
+% Painters for every polygonal glyph, after \tnv@endpolygon.  The shadow
+% and the body are separate scene fragments (see Scene below).
+\newcommand{\tnv@paintpolygonshadow}{%
+  \begin{scope}[shift={(\tnv@shadowx,\tnv@shadowy)}]
+    \fill[tnv@shadow,opacity=\tnv@shadowopacity] \tnv@glyphpath;
+  \end{scope}%
+}
+\newcommand{\tnv@paintpolygonbody}{%
+  % Flat faces keep only a weak, large-scale directional gradient.
+  \tnv@glassface
+  \draw[draw=tnv@outline,line width=\tnv@linewidth,line join=round] \tnv@glyphpath;
+}
+
+% Polygon geometry for each kind, named \tnv@polygon@<shape>.
+\expandafter\newcommand\csname tnv@polygon@rounded rectangle\endcsname{%
+  \tnv@beginpolygon
+  \tnv@vertex{-\tnv@halfwidth}{-\tnv@halfheight}%
+  \tnv@vertex{ \tnv@halfwidth}{-\tnv@halfheight}%
+  \tnv@vertex{ \tnv@halfwidth}{ \tnv@halfheight}%
+  \tnv@vertex{-\tnv@halfwidth}{ \tnv@halfheight}%
+  \tnv@endpolygon
+}
+
+\expandafter\newcommand\csname tnv@polygon@triangle\endcsname{%
+  \tnv@beginpolygon
+  \tnv@vertex{-\tnv@halfwidth}{-\tnv@halfheight}%
+  \tnv@vertex{ \tnv@halfwidth}{-\tnv@halfheight}%
+  \tnv@vertex{0pt}{\tnv@halfheight}%
+  \tnv@endpolygon
+}
+
+\expandafter\newcommand\csname tnv@polygon@diamond\endcsname{%
+  \tnv@beginpolygon
+  \tnv@vertex{0pt}{-\tnv@halfheight}%
+  \tnv@vertex{\tnv@halfwidth}{0pt}%
+  \tnv@vertex{0pt}{\tnv@halfheight}%
+  \tnv@vertex{-\tnv@halfwidth}{0pt}%
+  \tnv@endpolygon
+}
+
+\newcommand{\tnv@paintorbshadow}{%
+  \fill[tnv@shadow,opacity=\tnv@shadowopacity]
+    (\tnv@shadowx,\tnv@shadowy) circle[radius=\tnv@radius];
+}
+\newcommand{\tnv@paintorbbody}{%
+  \shade[ball color=tnv@base] (0,0) circle[radius=\tnv@radius];
+  \draw[draw=tnv@outline,line width=\tnv@linewidth] (0,0) circle[radius=\tnv@radius];
+}
+
+\def\tnv@kind@orb{orb}
+
+\newcommand{\tnv@glyphdefaults}{%
+  \def\tnv@shape{rounded rectangle}%
+  \def\tnv@color{black!48}%
+  \def\tnv@width{18mm}%
+  \def\tnv@height{12mm}%
+  \def\tnv@corner{2mm}%
+  \def\tnv@rotation{0}%
+  \def\tnv@linewidth{.55pt}%
+  \def\tnv@lightangle{135}%
+  \def\tnv@highlightsize{.66}%
+  \def\tnv@highlightinset{0pt}%
+  \def\tnv@shadowoffset{1.0mm}%
+  \def\tnv@shadowopacity{.12}%
+  \def\tnv@font{\normalsize}%
+  \def\tnv@textcolor{black}%
+  \def\tnv@z{0}%
+}
+
+% Paint part #1 (shadow or body) of the glyph with keys #2 centred at
+% (#3pt,#4pt), with label #5.  Shadings are fitted in canvas space, so the
+% glyph is painted under a canvas transform to keep its gradient attached to
+% the rotated geometry.
+\newcommand{\tnv@drawglyph}[5]{%
+  \begingroup
+  \tnv@glyphdefaults
+  \pgfqkeys{/tnv}{#2}%
+  \tnv@preparestyle
+  \begin{scope}[transform canvas={shift={(#3pt,#4pt)},rotate=\tnv@rotation}]
+    \ifx\tnv@shape\tnv@kind@orb
+      \csname tnv@paintorb#1\endcsname
+    \else
+      \csname tnv@polygon@\tnv@shape\endcsname
+      \csname tnv@paintpolygon#1\endcsname
+    \fi
+  \end{scope}
+  \def\tnv@part{#1}%
+  \ifx\tnv@part\tnv@part@body
+    \node[font=\tnv@font,text=\tnv@textcolor,inner sep=0pt] at (#3pt,#4pt) {#5};
+  \fi
+  \endgroup
+}
+\def\tnv@part@body{body}
+
+% \tnvShape[<visual keys>]{<stable id>}{<TikZ coordinate>}{<main label>}
+%
+% corner radius = 0 makes every polygonal glyph sharp.  highlight size scales
+% the width of the contour rims; highlight inset moves the specular peak
+% inwards from the contour.  z orders glyphs among themselves.  The glyph is
+% registered at once, so bonds and TikZ can refer to it, but it is painted
+% when the picture ends, in scene order.
+\NewDocumentCommand{\tnvShape}{O{} m m m}{%
+  \begingroup
+  \tnv@glyphdefaults
+  \pgfqkeys{/tnv}{#1}%
+  \tnv@preparestyle
+  \ifx\tnv@shape\tnv@kind@orb\else
+    \ifcsname tnv@polygon@\tnv@shape\endcsname\else
+      \PackageError{tnviz}{Unknown shape `\tnv@shape'}%
+        {Use orb, rounded rectangle, triangle, or diamond.}%
+    \fi
+  \fi
+  \coordinate (#2) at #3;
+  \tnv@register{#2}%
+  % The picture's bounding box must include the glyph now.
+  \begin{scope}[shift={#3},rotate=\tnv@rotation]
+    \pgfmathsetlengthmacro{\tnv@bboxx}{\tnv@halfwidth+\tnv@shadowoffset+1.5pt}%
+    \pgfmathsetlengthmacro{\tnv@bboxy}{\tnv@halfheight+\tnv@shadowoffset+1.5pt}%
+    \path (-\tnv@bboxx,-\tnv@bboxy) rectangle (\tnv@bboxx,\tnv@bboxy);
+  \end{scope}
+  \tnv@nextorder
+  \edef\tnv@x{\tnv@tget{#2}{x}}\edef\tnv@y{\tnv@tget{#2}{y}}%
+  \tnv@addfragment{\tnv@pass@scene}{0}{\tnv@class@shadows}{\tnv@z}{\tnv@order}%
+    {\noexpand\tnv@drawglyph{shadow}{\unexpanded{#1}}{\tnv@x}{\tnv@y}{}}%
+  \tnv@addfragment{\tnv@pass@scene}{0}{\tnv@class@glyphs}{\tnv@z}{\tnv@order}%
+    {\noexpand\tnv@drawglyph{body}{\unexpanded{#1}}{\tnv@x}{\tnv@y}{\unexpanded{#4}}}%
+  \endgroup
+}
+
+% ===========================================================================
+% Bonds
+%
+% A bond is a centreline through points P_0..P_n: straight segments joined
+% by circular fillets, so polylines bend like real tubes.  The same
+% line-and-arc centreline is stroked for a line bond, or thickened to radius
+% R for a tube.  Bonds are ordered below the glyphs, so tensors cover the
+% bond ends and cast their shadow onto the tube.  Bond geometry spans whole
+% pictures, beyond pgfmath's range, so it is computed with l3fp.
+% ===========================================================================
+
+\def\tnv@fp#1#2{\edef#1{\fpeval{round(#2,5)}}}
+
+% ===========================================================================
+% Scene
+%
+% Glyphs and bonds do not draw when they are called.  They register
+% fragments: a piece of drawing code with a sort key
+%
+%   (pass, depth, class, z, order)
+%
+% compared lexicographically when the picture ends.  pass separates
+% background, scene, and overlay; depth is the distance from the viewer
+% (far first), constant in 2D and reserved for 3D; class is the drawing
+% convention (bonds < glyph shadows < glyphs < front); z is a user override
+% within a class; order is the source order.  One object may own several
+% fragments with different keys, such as a glyph's shadow and body; in 3D a
+% tube will be split into fragments at different depths.  The whole scene is drawn on
+% the layer tnvscene, below TikZ's main layer, so ordinary TikZ annotations
+% stay on top of it.
+% ===========================================================================
+
+\pgfdeclarelayer{tnvscene}
+\pgfsetlayers{tnvscene,main}
+
+\def\tnv@pass@background{0}
+\def\tnv@pass@scene{1}
+\def\tnv@pass@overlay{2}
+\def\tnv@class@bonds{1}
+\def\tnv@class@shadows{2}
+\def\tnv@class@glyphs{3}
+\def\tnv@class@front{4}
+
+\newcount\tnv@nfrag
+\newcount\tnv@norder
+\newcount\tnv@nbond
+\gdef\tnv@glyphlist{}
+
+\newcommand{\tnv@nextorder}{%
+  \global\advance\tnv@norder by 1
+  \edef\tnv@order{\the\tnv@norder}%
+}
+
+% \tnv@addfragment{pass}{depth}{class}{z}{order}{code}; the code is expanded
+% with \xdef, so protect what must run later.
+\newcommand{\tnv@addfragment}[6]{%
+  \global\advance\tnv@nfrag by 1
+  \expandafter\xdef\csname tnv@F@\the\tnv@nfrag @key\endcsname{%
+    {#1}{#2}{#3}{#4}{#5}}%
+  \expandafter\xdef\csname tnv@F@\the\tnv@nfrag @code\endcsname{#6}%
+  \tnv@pushfragment{\the\tnv@nfrag}%
+}
+
+\ExplSyntaxOn
+\seq_new:N \g__tnv_fragments_seq
+\cs_new_protected:Npn \tnv@pushfragment #1
+  { \seq_gput_right:Nx \g__tnv_fragments_seq {#1} }
+% Lexicographic comparison of two keys {pass}{depth}{class}{z}{order}:
+% depth sorts far (larger) first, every other field ascending.
+\cs_new:Npn \__tnv_field_i:nnnnn #1#2#3#4#5 {#1}
+\cs_new:Npn \__tnv_field_ii:nnnnn #1#2#3#4#5 {#2}
+\cs_new:Npn \__tnv_field_iii:nnnnn #1#2#3#4#5 {#3}
+\cs_new:Npn \__tnv_field_iv:nnnnn #1#2#3#4#5 {#4}
+\cs_new:Npn \__tnv_field_v:nnnnn #1#2#3#4#5 {#5}
+% #1-#5 are the first key's fields, #6 the second key.
+\cs_new:Npn \__tnv_key_compare:nnnnnn #1#2#3#4#5#6
+  {
+    \fp_eval:n
+      {
+        ((#1) != (\__tnv_field_i:nnnnn #6)) ? sign((#1) - (\__tnv_field_i:nnnnn #6)) :
+        (((#2) != (\__tnv_field_ii:nnnnn #6)) ? sign((\__tnv_field_ii:nnnnn #6) - (#2)) :
+        (((#3) != (\__tnv_field_iii:nnnnn #6)) ? sign((#3) - (\__tnv_field_iii:nnnnn #6)) :
+        (((#4) != (\__tnv_field_iv:nnnnn #6)) ? sign((#4) - (\__tnv_field_iv:nnnnn #6)) :
+        sign((#5) - (\__tnv_field_v:nnnnn #6)))))
+      }
+  }
+\cs_new:Npn \__tnv_compare_keys:nn #1#2 { \__tnv_key_compare:nnnnnn #1 {#2} }
+\cs_generate_variant:Nn \__tnv_compare_keys:nn { vv }
+\cs_new:Npn \tnv@comparefragments #1#2
+  { \__tnv_compare_keys:vv { tnv@F@#1@key } { tnv@F@#2@key } }
+\cs_new_protected:Npn \tnv@drawfragments
+  {
+    \seq_gsort:Nn \g__tnv_fragments_seq
+      {
+        \int_compare:nNnTF { \tnv@comparefragments {##1} {##2} } > { 0 }
+          { \sort_return_swapped: } { \sort_return_same: }
+      }
+    \seq_map_inline:Nn \g__tnv_fragments_seq { \use:c { tnv@F@##1@code } }
+    \seq_gclear:N \g__tnv_fragments_seq
+  }
+\ExplSyntaxOff
+
+% Resolve all bonds, find their crossings, and draw the sorted scene.  Runs
+% at the end of every picture.
+\newcommand{\tnv@flush}{%
+  \ifnum\tnv@nbond>0
+    \tnv@resolvebonds
+    \ifnum\tnv@anyhop=1 \tnv@findcrossings\fi
+  \fi
+  \ifnum\tnv@nfrag>0
+    \begin{pgfonlayer}{tnvscene}
+      \tnv@drawfragments
+    \end{pgfonlayer}
+  \fi
+  \global\tnv@nfrag=0
+  \global\tnv@norder=0
+  \global\tnv@nbond=0
+  \gdef\tnv@glyphlist{}%
+  \gdef\tnv@anyhop{0}%
+}
+\tikzset{every picture/.append style={execute at end picture={\tnv@flush}}}
+
+% ---- Glyph registry -------------------------------------------------------
+
+\def\tnv@tset#1#2#3{\expandafter\xdef\csname tnv@T@#1@#2\endcsname{#3}}
+\def\tnv@tget#1#2{\csname tnv@T@#1@#2\endcsname}
+
+% Scenes are drawn when the picture ends, outside any scope, so every
+% position is recorded in picture coordinates: the current transformation
+% (for instance a shifted scope) is applied now.
+\newcommand{\tnv@pictureanchor}[1]{%
+  \pgfpointtransformed{\pgfpointanchor{#1}{center}}%
+}
+\newcommand{\tnv@picturepoint}[1]{%
+  \tikz@scan@one@point\pgfutil@firstofone#1\relax
+  \pgfpointtransformed{\pgfqpoint{\pgf@x}{\pgf@y}}%
+}
+
+% Record what a bond needs to know about glyph #1: its centre in picture
+% coordinates and its local geometry.
+\newcommand{\tnv@register}[1]{%
+  \tnv@pictureanchor{#1}%
+  \tnv@tset{#1}{x}{\strip@pt\pgf@x}%
+  \tnv@tset{#1}{y}{\strip@pt\pgf@y}%
+  \tnv@tset{#1}{shape}{\tnv@shape}%
+  \pgfmathsetmacro{\tnv@tmp}{\tnv@halfwidth}\tnv@tset{#1}{hw}{\tnv@tmp}%
+  \pgfmathsetmacro{\tnv@tmp}{\tnv@halfheight}\tnv@tset{#1}{hh}{\tnv@tmp}%
+  \pgfmathsetmacro{\tnv@tmp}{\tnv@corner}\tnv@tset{#1}{corner}{\tnv@tmp}%
+  \tnv@tset{#1}{rot}{\tnv@rotation}%
+  \xdef\tnv@glyphlist{\tnv@glyphlist{#1}}%
+}
+
+% Distance from the centre of glyph #1 to its silhouette along the page
+% angle #2, into \tnv@bt (pt).  This is the only question bonds ask a glyph,
+% dispatched on the glyph kind as \tnv@boundary@<shape>, so other glyph
+% families (for instance 3D solids) can answer it their own way.
+\newcommand{\tnv@boundary}[2]{%
+  \csname tnv@boundary@\tnv@tget{#1}{shape}\endcsname{#1}{#2}%
+}
+\expandafter\def\csname tnv@boundary@orb\endcsname#1#2{%
+  \xdef\tnv@bt{\tnv@tget{#1}{hw}}%
+}
+\expandafter\def\csname tnv@boundary@rounded rectangle\endcsname{\tnv@polygonboundary}
+\expandafter\def\csname tnv@boundary@triangle\endcsname{\tnv@polygonboundary}
+\expandafter\def\csname tnv@boundary@diamond\endcsname{\tnv@polygonboundary}
+
+% Rounded polygons: the ray is tested against every straight edge (within
+% its tangent points) and every fillet (within its wedge); on a convex glyph
+% exactly one piece is hit.
+\newcommand{\tnv@polygonboundary}[2]{%
+  \edef\tnv@kind{\tnv@tget{#1}{shape}}%
+  \begingroup
+    \edef\tnv@halfwidth{\tnv@tget{#1}{hw}pt}%
+    \edef\tnv@halfheight{\tnv@tget{#1}{hh}pt}%
+    \edef\tnv@corner{\tnv@tget{#1}{corner}pt}%
+    \csname tnv@polygon@\tnv@kind\endcsname
+    \tnv@fp\tnv@rdx{cosd(#2-(\tnv@tget{#1}{rot}))}%
+    \tnv@fp\tnv@rdy{sind(#2-(\tnv@tget{#1}{rot}))}%
+    \gdef\tnv@bt{0}%
+    \foreach \i in {0,...,\tnv@last}{%
+      \pgfmathtruncatemacro{\h}{mod(\i+\tnv@n-1,\tnv@n)}%
+      \pgfmathtruncatemacro{\j}{mod(\i+1,\tnv@n)}%
+      % Straight edge i, from vertex i to vertex j.
+      \tnv@fp\tnv@nd{cosd(\tnv@get{nang}{\i})*\tnv@rdx+sind(\tnv@get{nang}{\i})*\tnv@rdy}%
+      \ifdim\tnv@nd pt>.001pt
+        \tnv@fp\tnv@t{(cosd(\tnv@get{nang}{\i})*\tnv@get{vx}{\i}
+          +sind(\tnv@get{nang}{\i})*\tnv@get{vy}{\i})/\tnv@nd}%
+        \tnv@fp\tnv@a{(\tnv@t*\tnv@rdx-\tnv@get{vx}{\i})*\tnv@get{ex}{\i}
+          +(\tnv@t*\tnv@rdy-\tnv@get{vy}{\i})*\tnv@get{ey}{\i}}%
+        \ifnum\fpeval{\tnv@a>=\tnv@get{tl}{\i}-.01
+            && \tnv@a<=\tnv@get{len}{\i}-\tnv@get{tl}{\j}+.01}=1
+          \xdef\tnv@bt{\tnv@t}%
+        \fi
+      \fi
+      % Fillet at vertex i, between edges h and i.
+      \ifdim\tnv@filletr pt>.01pt
+        \edef\tnv@cx{\tnv@get{cx}{\i}}\edef\tnv@cy{\tnv@get{cy}{\i}}%
+        \tnv@fp\tnv@b{\tnv@rdx*\tnv@cx+\tnv@rdy*\tnv@cy}%
+        \tnv@fp\tnv@disc{\tnv@b*\tnv@b-\tnv@cx*\tnv@cx-\tnv@cy*\tnv@cy
+          +\tnv@filletr*\tnv@filletr}%
+        \ifdim\tnv@disc pt>0pt
+          \tnv@fp\tnv@t{\tnv@b+sqrt(\tnv@disc)}%
+          \tnv@fp\tnv@ux{\tnv@t*\tnv@rdx-\tnv@cx}%
+          \tnv@fp\tnv@uy{\tnv@t*\tnv@rdy-\tnv@cy}%
+          \ifnum\fpeval{\tnv@ux*\tnv@get{ex}{\h}+\tnv@uy*\tnv@get{ey}{\h}>=-.01
+              && \tnv@ux*\tnv@get{ex}{\i}+\tnv@uy*\tnv@get{ey}{\i}<=.01}=1
+            \xdef\tnv@bt{\tnv@t}%
+          \fi
+        \fi
+      \fi
+    }%
+  \endgroup
+}
+
+% ---- Centreline points ----------------------------------------------------
+
+\def\tnv@dir@right{0}
+\def\tnv@dir@up{90}
+\def\tnv@dir@left{180}
+\def\tnv@dir@down{-90}
+% Page angle of a port name or number #1 -> \tnv@portangle.
+\newcommand{\tnv@setport}[1]{%
+  \ifcsname tnv@dir@#1\endcsname
+    \edef\tnv@portangle{\csname tnv@dir@#1\endcsname}%
+  \else
+    \edef\tnv@portangle{#1}%
+  \fi
+}
+
+% A point may override the bend radius of its fillet (\tnv@nextbend) and
+% the fraction of the adjacent segments the fillet may use
+% (\tnv@nextclamp); empty means the bond's bend radius and one half.
+\def\tnv@nextbend{}
+\def\tnv@nextclamp{}
+\newcommand{\tnv@addxy}[2]{%
+  \tnv@fp\tnv@tmpx{#1}\tnv@fp\tnv@tmpy{#2}%
+  \ifnum\tnv@np>0
+    \pgfmathtruncatemacro{\tnv@prev}{\tnv@np-1}%
+    \edef\tnv@skip{\fpeval{abs(\tnv@tmpx-\tnv@get{px}{\tnv@prev})
+      +abs(\tnv@tmpy-\tnv@get{py}{\tnv@prev})<.01}}%
+  \else
+    \def\tnv@skip{0}%
+  \fi
+  \ifnum\tnv@skip=0
+    \tnv@gset{px}{\tnv@np}{\tnv@tmpx}%
+    \tnv@gset{py}{\tnv@np}{\tnv@tmpy}%
+    \tnv@gset{pbend}{\tnv@np}{\tnv@nextbend}%
+    \tnv@gset{pclamp}{\tnv@np}{\tnv@nextclamp}%
+    \pgfmathtruncatemacro{\tnv@tmpn}{\tnv@np+1}%
+    \global\let\tnv@np\tnv@tmpn
+  \fi
+}
+
+% A TikZ coordinate such as (1,2) or (a).
+\newcommand{\tnv@addcoord}[1]{%
+  \tikz@scan@one@point\pgfutil@firstofone#1\relax
+  \tnv@addxy{\strip@pt\pgf@x}{\strip@pt\pgf@y}%
+}
+
+% An end of the bond: a glyph id (its centre) or a TikZ coordinate, with or
+% without parentheses.
+% #2 is an optional port; the bond then leaves the glyph along the port
+% direction and runs straight for a stub before turning.
+\newcommand{\tnv@addend}[2]{%
+  \ifcsname tnv@T@#1@x\endcsname
+    \def\tnv@portdone{0}%
+    \edef\tnv@tmp{#2}%
+    \ifx\tnv@tmp\pgfutil@empty
+      \tnv@addxy{\tnv@tget{#1}{x}}{\tnv@tget{#1}{y}}%
+    \else
+      \tnv@setport{#2}%
+      \tnv@boundary{#1}{\tnv@portangle}%
+      \tnv@fp\tnv@reach{\tnv@bt+\tnv@stub}%
+      \tnv@portpoints{#1}%
+    \fi
+  \else
+    \tnv@ifparen#1\tnv@end{\tnv@addcoord{#1}}{\tnv@addcoord{(#1)}}%
+  \fi
+}
+\def\tnv@ifparen#1#2\tnv@end{\ifx(#1\expandafter\@firstoftwo\else\expandafter\@secondoftwo\fi}
+
+\newcommand{\tnv@portpoints}[1]{%
+  \ifnum\tnv@endpos=0
+    \tnv@addxy{\tnv@tget{#1}{x}}{\tnv@tget{#1}{y}}%
+    \tnv@addxy{\tnv@tget{#1}{x}+\tnv@reach*cosd(\tnv@portangle)}%
+      {\tnv@tget{#1}{y}+\tnv@reach*sind(\tnv@portangle)}%
+  \else
+    \tnv@addxy{\tnv@tget{#1}{x}+\tnv@reach*cosd(\tnv@portangle)}%
+      {\tnv@tget{#1}{y}+\tnv@reach*sind(\tnv@portangle)}%
+    \tnv@addxy{\tnv@tget{#1}{x}}{\tnv@tget{#1}{y}}%
+  \fi
+}
+
+% ---- Filleted centreline --------------------------------------------------
+%
+% Segment k runs from P_k to P_k+1 with unit direction e_k.  Interior vertex
+% i turns by delta_i (signed, left positive) and receives a fillet of radius
+% rho_i = min(bend radius, half of each adjacent segment), unless the point
+% overrides both (see \tnv@addxy); the fillet consumes the
+% tangent length tl_i = rho_i tan(|delta_i|/2) on both sides.  Piece k of the
+% straight part runs from S_k = P_k + tl_k e_k to Q_k = P_k+1 - tl_k+1 e_k.
+
+\newcommand{\tnv@buildcenterline}{%
+  \pgfmathtruncatemacro{\tnv@lastseg}{\tnv@np-2}%
+  \pgfmathtruncatemacro{\tnv@lastpt}{\tnv@np-1}%
+  \foreach \k in {0,...,\tnv@lastseg}{%
+    \pgfmathtruncatemacro{\j}{\k+1}%
+    \tnv@fp\tnv@dx{\tnv@get{px}{\j}-\tnv@get{px}{\k}}%
+    \tnv@fp\tnv@dy{\tnv@get{py}{\j}-\tnv@get{py}{\k}}%
+    \tnv@fp\tnv@len{sqrt(\tnv@dx*\tnv@dx+\tnv@dy*\tnv@dy)}%
+    \tnv@gset{slen}{\k}{\tnv@len}%
+    \tnv@gset{sex}{\k}{\fpeval{round(\tnv@dx/\tnv@len,6)}}%
+    \tnv@gset{sey}{\k}{\fpeval{round(\tnv@dy/\tnv@len,6)}}%
+    \tnv@gset{sang}{\k}{\fpeval{round(atand(\tnv@dy,\tnv@dx),4)}}%
+  }%
+  \tnv@gset{stl}{0}{0}\tnv@gset{stl}{\tnv@lastpt}{0}%
+  \tnv@gset{rho}{0}{0}\tnv@gset{rho}{\tnv@lastpt}{0}%
+  \ifnum\tnv@np>2
+    \pgfmathtruncatemacro{\tnv@lastinner}{\tnv@np-2}%
+    \foreach \i in {1,...,\tnv@lastinner}{%
+      \pgfmathtruncatemacro{\h}{\i-1}%
+      \edef\tnv@ehx{\tnv@get{sex}{\h}}\edef\tnv@ehy{\tnv@get{sey}{\h}}%
+      \edef\tnv@eix{\tnv@get{sex}{\i}}\edef\tnv@eiy{\tnv@get{sey}{\i}}%
+      \tnv@fp\tnv@delta{atand(\tnv@ehx*\tnv@eiy-\tnv@ehy*\tnv@eix,
+        \tnv@ehx*\tnv@eix+\tnv@ehy*\tnv@eiy)}%
+      \ifnum\fpeval{abs(\tnv@delta)<.5}=1
+        \tnv@gset{rho}{\i}{0}\tnv@gset{stl}{\i}{0}%
+      \else
+        \tnv@fp\tnv@tan{tand(abs(\tnv@delta)/2)}%
+        \edef\tnv@vb{\tnv@get{pbend}{\i}}%
+        \ifx\tnv@vb\pgfutil@empty\let\tnv@vb\tnv@bend\fi
+        \edef\tnv@vc{\tnv@get{pclamp}{\i}}%
+        \ifx\tnv@vc\pgfutil@empty\def\tnv@vc{.5}\fi
+        \tnv@fp\tnv@rho{min(\tnv@vb,
+          \tnv@vc*min(\tnv@get{slen}{\h},\tnv@get{slen}{\i})/\tnv@tan)}%
+        \ifnum\fpeval{\tnv@istube=1 && \tnv@rho<\tnv@R && \tnv@rho>0}=1
+          \PackageWarning{tnviz}{A bend is too tight for the tube radius;
+            lengthen the adjacent segments}%
+        \fi
+        \tnv@fp\tnv@tl{\tnv@rho*\tnv@tan}%
+        \tnv@fp\tnv@sgn{sign(\tnv@delta)}%
+        \tnv@fp\tnv@tinx{\tnv@get{px}{\i}-\tnv@tl*\tnv@ehx}%
+        \tnv@fp\tnv@tiny{\tnv@get{py}{\i}-\tnv@tl*\tnv@ehy}%
+        % The centre is on the inner side of the turn.
+        \tnv@fp\tnv@acx{\tnv@tinx-\tnv@sgn*\tnv@rho*\tnv@ehy}%
+        \tnv@fp\tnv@acy{\tnv@tiny+\tnv@sgn*\tnv@rho*\tnv@ehx}%
+        \tnv@gset{rho}{\i}{\tnv@rho}\tnv@gset{stl}{\i}{\tnv@tl}%
+        \tnv@gset{delta}{\i}{\tnv@delta}\tnv@gset{sgn}{\i}{\tnv@sgn}%
+        \tnv@gset{acx}{\i}{\tnv@acx}\tnv@gset{acy}{\i}{\tnv@acy}%
+        \tnv@gset{a0}{\i}{\fpeval{round(atand(\tnv@tiny-\tnv@acy,\tnv@tinx-\tnv@acx),4)}}%
+        \tnv@gset{r0x}{\i}{\fpeval{round(\tnv@tinx-\tnv@acx,5)}}%
+        \tnv@gset{r0y}{\i}{\fpeval{round(\tnv@tiny-\tnv@acy,5)}}%
+        \tnv@gset{r1x}{\i}{\fpeval{round(\tnv@get{px}{\i}+\tnv@tl*\tnv@eix-\tnv@acx,5)}}%
+        \tnv@gset{r1y}{\i}{\fpeval{round(\tnv@get{py}{\i}+\tnv@tl*\tnv@eiy-\tnv@acy,5)}}%
+      \fi
+    }%
+  \fi
+  % Straight pieces and the centreline path.
+  \foreach \k in {0,...,\tnv@lastseg}{%
+    \pgfmathtruncatemacro{\j}{\k+1}%
+    \tnv@gset{sx}{\k}{\fpeval{round(\tnv@get{px}{\k}+\tnv@get{stl}{\k}*\tnv@get{sex}{\k},5)}}%
+    \tnv@gset{sy}{\k}{\fpeval{round(\tnv@get{py}{\k}+\tnv@get{stl}{\k}*\tnv@get{sey}{\k},5)}}%
+    \tnv@gset{qx}{\k}{\fpeval{round(\tnv@get{px}{\j}-\tnv@get{stl}{\j}*\tnv@get{sex}{\k},5)}}%
+    \tnv@gset{qy}{\k}{\fpeval{round(\tnv@get{py}{\j}-\tnv@get{stl}{\j}*\tnv@get{sey}{\k},5)}}%
+    \tnv@gset{plen}{\k}{\fpeval{round(\tnv@get{slen}{\k}-\tnv@get{stl}{\k}-\tnv@get{stl}{\j},5)}}%
+  }%
+  \xdef\tnv@centerpath{(\tnv@get{sx}{0}pt,\tnv@get{sy}{0}pt)}%
+  \foreach \k in {0,...,\tnv@lastseg}{%
+    \pgfmathtruncatemacro{\j}{\k+1}%
+    \xdef\tnv@centerpath{\tnv@centerpath -- (\tnv@get{qx}{\k}pt,\tnv@get{qy}{\k}pt)}%
+    \tnv@arcpiece{\j}{\tnv@get{rho}{\j}}{}%
+    \xdef\tnv@centerpath{\tnv@centerpath\tnv@piece}%
+  }%
+}
+
+% Arc of the fillet at vertex #1 with radius #2 into \tnv@piece; #3 = r
+% draws it in reverse.  Empty when the vertex has no fillet.
+\def\tnv@reverse{r}
+\newcommand{\tnv@arcpiece}[3]{%
+  \gdef\tnv@piece{}%
+  \ifnum#1<\tnv@lastpt
+    \ifdim\tnv@get{rho}{#1}pt>0pt
+      \def\tnv@rev{#3}%
+      \ifx\tnv@rev\tnv@reverse
+        \xdef\tnv@piece{ arc[start angle=\fpeval{\tnv@get{a0}{#1}+\tnv@get{delta}{#1}},
+          delta angle=\fpeval{-\tnv@get{delta}{#1}},radius=#2pt]}%
+      \else
+        \xdef\tnv@piece{ arc[start angle=\tnv@get{a0}{#1},
+          delta angle=\tnv@get{delta}{#1},radius=#2pt]}%
+      \fi
+    \fi
+  \fi
+}
+
+% ---- Tube outline ---------------------------------------------------------
+%
+% The left offset of piece k is shifted by R along the left normal
+% (-e_y, e_x); a fillet's offset is concentric with radius rho - s R on the
+% left and rho + s R on the right.  Round caps are half circles about the
+% end points.
+
+\newcommand{\tnv@offsetpoint}[4]{% #1 x, #2 y, #3 segment, #4 side (+1 left)
+  (\fpeval{round(#1-(#4)*\tnv@R*\tnv@get{sey}{#3},5)}pt,
+   \fpeval{round(#2+(#4)*\tnv@R*\tnv@get{sex}{#3},5)}pt)}
+
+\newcommand{\tnv@buildoutline}{%
+  \xdef\tnv@outlinepath{\tnv@offsetpoint{\tnv@get{sx}{0}}{\tnv@get{sy}{0}}{0}{1}}%
+  \foreach \k in {0,...,\tnv@lastseg}{%
+    \pgfmathtruncatemacro{\j}{\k+1}%
+    \xdef\tnv@outlinepath{\tnv@outlinepath
+      -- \tnv@offsetpoint{\tnv@get{sx}{\k}}{\tnv@get{sy}{\k}}{\k}{1}
+      -- \tnv@offsetpoint{\tnv@get{qx}{\k}}{\tnv@get{qy}{\k}}{\k}{1}}%
+    \ifnum\j<\tnv@lastpt
+      \tnv@arcpiece{\j}{\fpeval{round(\tnv@get{rho}{\j}-\tnv@get{sgn}{\j}*\tnv@R,5)}}{}%
+      \xdef\tnv@outlinepath{\tnv@outlinepath\tnv@piece}%
+    \fi
+  }%
+  \ifx\tnv@cap\tnv@cap@round
+    \xdef\tnv@outlinepath{\tnv@outlinepath
+      arc[start angle=\fpeval{\tnv@get{sang}{\tnv@lastseg}+90},delta angle=-180,
+        radius=\tnv@R pt]}%
+  \fi
+  \foreach \k in {\tnv@lastseg,...,0}{%
+    \xdef\tnv@outlinepath{\tnv@outlinepath
+      -- \tnv@offsetpoint{\tnv@get{qx}{\k}}{\tnv@get{qy}{\k}}{\k}{-1}
+      -- \tnv@offsetpoint{\tnv@get{sx}{\k}}{\tnv@get{sy}{\k}}{\k}{-1}}%
+    \ifnum\k>0
+      \tnv@arcpiece{\k}{\fpeval{round(\tnv@get{rho}{\k}+\tnv@get{sgn}{\k}*\tnv@R,5)}}{r}%
+      \xdef\tnv@outlinepath{\tnv@outlinepath\tnv@piece}%
+    \fi
+  }%
+  \ifx\tnv@cap\tnv@cap@round
+    \xdef\tnv@outlinepath{\tnv@outlinepath
+      arc[start angle=\fpeval{\tnv@get{sang}{0}-90},delta angle=-180,
+        radius=\tnv@R pt] -- cycle}%
+  \else
+    \xdef\tnv@outlinepath{\tnv@outlinepath -- cycle}%
+  \fi
+}
+
+% ---- Tube shading ---------------------------------------------------------
+%
+% For every point p the shading finds the nearest centreline point q, over
+% the straight pieces (projection clamped to the piece) and the fillets
+% (radial projection, only inside the fillet's wedge).  The tube's surface
+% normal is then N = ((p-q)/R, sqrt(1-|p-q|^2/R^2)), so the cross-section is
+% a true half-cylinder whose lit side follows the local direction of the
+% tube, and the clamped ends give hemispherical caps.  N is lit by the same
+% world light as the glyphs, raised by \tnv@tubeelevation above the page:
+% ambient + diffuse N.L in the tube colour, plus a Blinn-Phong highlight.
+% Stack during the search: x y bestdx bestdy bestd2.
+
+\def\tnv@cap@round{round}
+\def\tnv@tubeelevation{38}
+\def\tnv@tubeambient{.40}
+\def\tnv@tubediffuse{.72}
+\def\tnv@tubespecular{.62}
+\def\tnv@tubeshininess{26}
+
+% Keep the candidate (dx dy d2) when it beats the best one.
+\def\tnv@keepnearest{%
+  2 copy dup mul exch dup mul add
+  dup 4 index lt {6 3 roll pop pop pop} {pop pop pop} ifelse}
+
+\newcommand{\tnv@buildtubecode}{%
+  \gdef\tnv@searchcode{}%
+  \foreach \k in {0,...,\tnv@lastseg}{%
+    \pgfmathtruncatemacro{\j}{\k+1}%
+    \edef\tnv@Sx{\tnv@get{sx}{\k}}\edef\tnv@Sy{\tnv@get{sy}{\k}}%
+    \edef\tnv@ex{\tnv@get{sex}{\k}}\edef\tnv@ey{\tnv@get{sey}{\k}}%
+    \xdef\tnv@searchcode{\tnv@searchcode\space
+      4 index \tnv@Sx\space sub \tnv@ex\space mul
+      4 index \tnv@Sy\space sub \tnv@ey\space mul add
+      dup 0 lt {pop 0} if dup \tnv@get{plen}{\k}\space gt {pop \tnv@get{plen}{\k}} if
+      dup \tnv@ex\space mul \tnv@Sx\space add 6 index exch sub
+      exch \tnv@ey\space mul \tnv@Sy\space add 5 index exch sub
+      \tnv@keepnearest}%
+    \ifnum\j<\tnv@lastpt
+      \ifdim\tnv@get{rho}{\j}pt>0pt
+        \edef\tnv@s{\tnv@get{sgn}{\j}}%
+        \xdef\tnv@searchcode{\tnv@searchcode\space
+          4 index \tnv@get{acx}{\j}\space sub 4 index \tnv@get{acy}{\j}\space sub
+          2 copy \tnv@get{r0x}{\j}\space mul exch \tnv@get{r0y}{\j}\space mul sub
+          \tnv@s\space mul 0 ge
+          2 index \tnv@get{r1y}{\j}\space mul 2 index \tnv@get{r1x}{\j}\space mul sub
+          \tnv@s\space mul 0 ge and
+          {2 copy dup mul exch dup mul add sqrt .0001 add
+           \tnv@get{rho}{\j}\space exch div 1 exch sub
+           dup 3 -1 roll mul 3 1 roll mul exch \tnv@keepnearest}
+          {pop pop} ifelse}%
+      \fi
+    \fi
+  }%
+  % Light and half vector.
+  \tnv@fp\tnv@lz{sind(\tnv@tubeelevation)}%
+  \tnv@fp\tnv@lx{cosd(\tnv@tubeelevation)*cosd(\tnv@lightangle)}%
+  \tnv@fp\tnv@ly{cosd(\tnv@tubeelevation)*sind(\tnv@lightangle)}%
+  \tnv@fp\tnv@hn{sqrt(\tnv@lx*\tnv@lx+\tnv@ly*\tnv@ly+(\tnv@lz+1)*(\tnv@lz+1))}%
+  \tnv@fp\tnv@hx{\tnv@lx/\tnv@hn}\tnv@fp\tnv@hy{\tnv@ly/\tnv@hn}%
+  \tnv@fp\tnv@hz{(\tnv@lz+1)/\tnv@hn}%
+  \tnv@rgbof{tnv@tube}{tube}%
+  \edef\tnv@code{%
+    1.00375 mul \tnv@cy\space add exch 1.00375 mul \tnv@cx\space add exch
+    0 0 100000000 \tnv@searchcode\space
+    pop 4 2 roll pop pop
+    \tnv@R\space div exch \tnv@R\space div exch
+    2 copy dup mul exch dup mul add 1 exch sub dup 0 lt {pop 0} if sqrt
+    3 copy \tnv@lz\space mul exch \tnv@ly\space mul add exch \tnv@lx\space mul add
+    dup 0 lt {pop 0} if
+    4 1 roll \tnv@hz\space mul exch \tnv@hy\space mul add exch \tnv@hx\space mul add
+    dup 0 lt {pop 0} if \tnv@tubeshininess\space exp
+    1 index \tnv@tubediffuse\space mul \tnv@tubeambient\space add \tnv@tuber\space mul
+    1 index \tnv@tubespecular\space mul add dup 1 gt {pop 1} if
+    2 index \tnv@tubediffuse\space mul \tnv@tubeambient\space add \tnv@tubeg\space mul
+    2 index \tnv@tubespecular\space mul add dup 1 gt {pop 1} if
+    3 index \tnv@tubediffuse\space mul \tnv@tubeambient\space add \tnv@tubeb\space mul
+    3 index \tnv@tubespecular\space mul add dup 1 gt {pop 1} if
+    5 3 roll pop pop}%
+}
+
+% ---- Public commands ------------------------------------------------------
+
+\pgfkeys{
+  /tnv/bond/.is family,
+  /tnv/bond,
+  style/.store in=\tnv@bondstyle,
+  width/.store in=\tnv@bondwidth,
+  color/.store in=\tnv@bondcolor,
+  from/.store in=\tnv@from,
+  to/.store in=\tnv@to,
+  via/.store in=\tnv@via,
+  bend radius/.store in=\tnv@bendradius,
+  stub/.store in=\tnv@stubkey,
+  cap/.store in=\tnv@cap,
+  light angle/.store in=\tnv@lightangle,
+  line width/.store in=\tnv@linewidth,
+  z/.store in=\tnv@z,
+  layer/.store in=\tnv@layer,
+  crossing/.store in=\tnv@crossingmode,
+  hop radius/.store in=\tnv@hopradius,
+  label/.store in=\tnv@bondlabel,
+  label pos/.store in=\tnv@labelpos,
+  label placement/.store in=\tnv@labelplacement,
+  label side/.store in=\tnv@labelside,
+  label distance/.store in=\tnv@labeldistance,
+  label font/.store in=\tnv@labelfont,
+  label color/.store in=\tnv@labelcolor,
+}
+
+\def\tnv@bondstyle@tube{tube}
+\def\tnv@layer@front{front}
+\def\tnv@type@leg{leg}
+\def\tnv@type@xy{xy}
+\def\tnv@crossing@hop{hop}
+\def\tnv@placement@on{on}
+\def\tnv@placement@beside{beside}
+\def\tnv@side@left{left}
+\def\tnv@side@right{right}
+\gdef\tnv@anyhop{0}
+
+\newcommand{\tnv@bonddefaults}{%
+  \def\tnv@bondstyle{line}%
+  \def\tnv@bondwidth{}%
+  \def\tnv@bondcolor{}%
+  \def\tnv@from{}\def\tnv@to{}\def\tnv@via{}%
+  \def\tnv@bendradius{}%
+  \def\tnv@stubkey{}%
+  \def\tnv@cap{round}%
+  \def\tnv@lightangle{135}%
+  \def\tnv@linewidth{.4pt}%
+  \def\tnv@z{0}%
+  \def\tnv@layer{back}%
+  \def\tnv@crossingmode{none}%
+  \def\tnv@hopradius{}%
+  \def\tnv@bondlabel{}%
+  \def\tnv@labelpos{.5}%
+  \def\tnv@labelplacement{auto}%
+  \def\tnv@labelside{auto}%
+  \def\tnv@labeldistance{1.5pt}%
+  \def\tnv@labelfont{\footnotesize}%
+  \def\tnv@labelcolor{}%
+}
+
+% Derived bond parameters, after the keys.
+\newcommand{\tnv@bondsetup}{%
+  \ifx\tnv@bondstyle\tnv@bondstyle@tube
+    \def\tnv@istube{1}%
+    \ifx\tnv@bondwidth\pgfutil@empty\def\tnv@bondwidth{2.2mm}\fi
+    \ifx\tnv@bondcolor\pgfutil@empty\def\tnv@bondcolor{black!42}\fi
+  \else
+    \def\tnv@istube{0}%
+    \ifx\tnv@bondwidth\pgfutil@empty\def\tnv@bondwidth{.9pt}\fi
+    \ifx\tnv@bondcolor\pgfutil@empty\def\tnv@bondcolor{black!72}\fi
+  \fi
+  \pgfmathsetmacro{\tnv@R}{.5*\tnv@bondwidth}%
+  % Tubes need a bend radius above their own radius.
+  \ifx\tnv@bendradius\pgfutil@empty
+    \pgfmathsetmacro{\tnv@bend}{max(1.6*\tnv@R,2mm)}%
+  \else
+    \pgfmathsetmacro{\tnv@bend}{\tnv@bendradius}%
+  \fi
+  \ifx\tnv@stubkey\pgfutil@empty
+    \pgfmathsetmacro{\tnv@stub}{\tnv@bend+\tnv@R}%
+  \else
+    \pgfmathsetmacro{\tnv@stub}{\tnv@stubkey}%
+  \fi
+  % Labels sit on a tube and beside a line unless told otherwise.
+  \ifx\tnv@labelplacement\tnv@placement@on
+    \def\tnv@labelon{1}%
+  \else
+    \ifx\tnv@labelplacement\tnv@placement@beside
+      \def\tnv@labelon{0}%
+    \else
+      \let\tnv@labelon\tnv@istube
+    \fi
+  \fi
+  \ifx\tnv@layer\tnv@layer@front
+    \let\tnv@class\tnv@class@front
+  \else
+    \let\tnv@class\tnv@class@bonds
+  \fi
+}
+
+% Bond records: \tnv@B@<index>@<field>, for the bond in \tnv@b.
+\def\tnv@bset#1#2{\expandafter\xdef\csname tnv@B@\tnv@b @#1\endcsname{#2}}
+\def\tnv@bget#1{\csname tnv@B@\tnv@b @#1\endcsname}
+
+% Record end #1 (a or b) given as #2: a coordinate in parentheses is
+% resolved now, in the caller's coordinate system; a name (glyph id or TikZ
+% node) is resolved when the picture ends.
+\newcommand{\tnv@recordend}[2]{%
+  \tnv@ifparen#2\tnv@end
+    {\tnv@picturepoint{#2}%
+     \tnv@bset{#1type}{xy}%
+     \tnv@bset{#1x}{\strip@pt\pgf@x}\tnv@bset{#1y}{\strip@pt\pgf@y}}%
+    {\tnv@bset{#1type}{name}\tnv@bset{#1}{#2}}%
+}
+
+\newcommand{\tnv@newbond}[1]{%
+  \global\advance\tnv@nbond by 1
+  \edef\tnv@b{\the\tnv@nbond}%
+  \tnv@nextorder
+  \tnv@bset{order}{\tnv@order}%
+  \tnv@bset{opts}{\unexpanded{#1}}%
+}
+
+% \tnvBond[<keys>]{<end>}{<end>}
+%
+% An end is a glyph id, a TikZ node name, or a coordinate in parentheses.
+% style=line|tube; width is the stroke width of a line or the diameter of a
+% tube.  from/to name a port (left, right, up, down, or a page angle) at
+% which the bond leaves a glyph; via is a list of intermediate coordinates.
+% Corners get fillets of the given bend radius.  layer=back|front puts the
+% bond below or above the glyphs and z orders it within its layer; where
+% bonds cross, the one with the higher key is drawn on top.  crossing=hop
+% makes the upper bond jump the crossing with a semicircle, as in circuit
+% diagrams; crossing=none (the default) leaves crossings alone.
+\NewDocumentCommand{\tnvBond}{O{} m m}{%
+  \begingroup
+  \tnv@bonddefaults
+  \pgfqkeys{/tnv/bond}{#1}%
+  \ifx\tnv@crossingmode\tnv@crossing@hop\gdef\tnv@anyhop{1}\fi
+  \tnv@newbond{#1}%
+  \tnv@recordend{a}{#2}%
+  \tnv@recordend{b}{#3}%
+  \tnv@bset{via}{}%
+  \ifx\tnv@via\pgfutil@empty\else
+    \foreach \tnv@p in \tnv@via {%
+      \expandafter\tnv@picturepoint\expandafter{\tnv@p}%
+      \tnv@bset{via}{\tnv@bget{via}{\strip@pt\pgf@x}{\strip@pt\pgf@y}}%
+    }%
+  \fi
+  \endgroup
+}
+
+% \tnvLeg[<bond keys>]{<glyph id>}{<port>}{<length>}
+%
+% An open leg: a bond leaving the glyph at the port and ending freely
+% <length> beyond its silhouette.
+\NewDocumentCommand{\tnvLeg}{O{} m m m}{%
+  \begingroup
+  \tnv@bonddefaults
+  \pgfqkeys{/tnv/bond}{#1}%
+  \ifx\tnv@crossingmode\tnv@crossing@hop\gdef\tnv@anyhop{1}\fi
+  \tnv@newbond{#1}%
+  \tnv@bset{atype}{name}\tnv@bset{a}{#2}%
+  \tnv@bset{btype}{leg}%
+  \tnv@bset{legport}{#3}%
+  \pgfmathsetmacro{\tnv@tmp}{#4}\tnv@bset{leglen}{\tnv@tmp}%
+  \tnv@bset{via}{}%
+  \endgroup
+}
+
+% ---- Resolving bonds ------------------------------------------------------
+
+\def\tnv@applyopts#1{\pgfqkeys{/tnv/bond}{#1}}
+
+\newcommand{\tnv@resolveend}[2]{%
+  \edef\tnv@type{\tnv@bget{#1type}}%
+  \ifx\tnv@type\tnv@type@xy
+    \tnv@addxy{\tnv@bget{#1x}}{\tnv@bget{#1y}}%
+  \else
+    \edef\tnv@name{\tnv@bget{#1}}%
+    \expandafter\tnv@addend\expandafter{\tnv@name}{#2}%
+  \fi
+}
+
+\def\tnv@viapoints#1#2{%
+  \ifx\relax#1\else
+    \tnv@addxy{#1}{#2}\expandafter\tnv@viapoints
+  \fi}
+
+\newcommand{\tnv@addchord}[5]{%
+  \pgfmathtruncatemacro{\tnv@tmpn}{\tnv@bget{nch}+1}%
+  \tnv@bset{nch}{\tnv@tmpn}%
+  \tnv@bset{ch@\tnv@tmpn}{{#1}{#2}{#3}{#4}{#5}}%
+}
+
+% Drawing code of the current bond (\tnv@b) from its points.
+\newcommand{\tnv@makebondcode}{%
+  \tnv@buildcenterline
+  \ifnum\tnv@istube=1
+    \tnv@preparetube
+    \xglobal\colorlet{tnv@bondoutline@\tnv@b}{tnv@tube!62!black}%
+    \tnv@bset{draw}{\noexpand\tnv@drawtube{\tnv@outlinepath}{\tnv@cx}{\tnv@cy}%
+      {\tnv@tubename}{tnv@bondoutline@\tnv@b}{\tnv@linewidth}}%
+    \pgfmathsetmacro{\tnv@hw}{\tnv@R+.5*\tnv@linewidth}%
+  \else
+    \tnv@bset{draw}{\noexpand\tnv@drawline{\tnv@centerpath}{\tnv@bondcolor}%
+      {\tnv@bondwidth}}%
+    \pgfmathsetmacro{\tnv@hw}{.5*\tnv@bondwidth}%
+  \fi
+  \tnv@bset{hw}{\tnv@hw}%
+  \tnv@makelabelcode
+}
+
+\newcommand{\tnv@loadbondopts}[1]{%
+  \edef\tnv@b{#1}%
+  \tnv@bonddefaults
+  \expandafter\expandafter\expandafter\tnv@applyopts
+    \expandafter\expandafter\expandafter{\csname tnv@B@#1@opts\endcsname}%
+  \tnv@bondsetup
+}
+
+% Turn bond #1 into drawing code and a scene fragment, and, when some bond
+% hops, approximate its centreline by chords for the crossing search.
+\newcommand{\tnv@resolvebond}[1]{%
+  \begingroup
+  \tnv@loadbondopts{#1}%
+  \gdef\tnv@np{0}%
+  \edef\tnv@type{\tnv@bget{btype}}%
+  \ifx\tnv@type\tnv@type@leg
+    \edef\tnv@stub{\tnv@bget{leglen}}%
+    \def\tnv@endpos{0}\tnv@resolveend{a}{\tnv@bget{legport}}%
+  \else
+    \def\tnv@endpos{0}\tnv@resolveend{a}{\tnv@from}%
+    \expandafter\expandafter\expandafter\tnv@viapoints
+      \csname tnv@B@#1@via\endcsname\relax\relax
+    \def\tnv@endpos{1}\tnv@resolveend{b}{\tnv@to}%
+  \fi
+  \ifnum\tnv@np<2
+    \PackageError{tnviz}{A bond needs two distinct ends}{}%
+  \else
+    % Keep the resolved points, in case hops are inserted later.
+    \tnv@bset{pts}{}%
+    \pgfmathtruncatemacro{\tnv@lastpt}{\tnv@np-1}%
+    \foreach \k in {0,...,\tnv@lastpt}{%
+      \tnv@bset{pts}{\tnv@bget{pts}{\tnv@get{px}{\k}}{\tnv@get{py}{\k}}}%
+    }%
+    \tnv@bset{crossing}{\tnv@crossingmode}%
+    \tnv@bset{hops}{}%
+    \tnv@makebondcode
+    \tnv@bset{key}{{\tnv@pass@scene}{0}{\tnv@class}{\tnv@z}{\tnv@bget{order}}}%
+    \tnv@addfragment{\tnv@pass@scene}{0}{\tnv@class}{\tnv@z}{\tnv@bget{order}}%
+      {\noexpand\csname tnv@B@#1@draw\noexpand\endcsname}%
+    \ifx\tnv@bondlabel\pgfutil@empty\else
+      \ifnum\tnv@labelon=1
+        % Printed on the tube: ordered with the tube itself.
+        \tnv@addfragment{\tnv@pass@scene}{0}{\tnv@class}{\tnv@z}%
+          {\fpeval{\tnv@bget{order}+.25}}%
+          {\noexpand\csname tnv@B@#1@label\noexpand\endcsname}%
+      \else
+        % Beside the bond: always readable, above the scene.
+        \tnv@addfragment{\tnv@pass@overlay}{0}{0}{\tnv@z}{\tnv@bget{order}}%
+          {\noexpand\csname tnv@B@#1@label\noexpand\endcsname}%
+      \fi
+    \fi
+    \ifnum\tnv@anyhop=1
+      % Chords: the straight pieces (tagged with their segment), and each
+      % fillet split every 12 degrees (tagged -1).
+      \tnv@bset{nch}{0}%
+      \foreach \k in {0,...,\tnv@lastseg}{%
+        \ifdim\tnv@get{plen}{\k}pt>.01pt
+          \tnv@addchord{\tnv@get{sx}{\k}}{\tnv@get{sy}{\k}}%
+            {\tnv@get{qx}{\k}}{\tnv@get{qy}{\k}}{\k}%
+        \fi
+        \pgfmathtruncatemacro{\j}{\k+1}%
+        \ifnum\j<\tnv@lastpt
+          \ifdim\tnv@get{rho}{\j}pt>0pt
+            \edef\tnv@steps{\fpeval{max(2,ceil(abs(\tnv@get{delta}{\j})/12))}}%
+            \foreach \m in {1,...,\tnv@steps}{%
+              \tnv@fp\tnv@angA{\tnv@get{a0}{\j}+\tnv@get{delta}{\j}*(\m-1)/\tnv@steps}%
+              \tnv@fp\tnv@angB{\tnv@get{a0}{\j}+\tnv@get{delta}{\j}*\m/\tnv@steps}%
+              \tnv@addchord
+                {\fpeval{round(\tnv@get{acx}{\j}+\tnv@get{rho}{\j}*cosd(\tnv@angA),5)}}%
+                {\fpeval{round(\tnv@get{acy}{\j}+\tnv@get{rho}{\j}*sind(\tnv@angA),5)}}%
+                {\fpeval{round(\tnv@get{acx}{\j}+\tnv@get{rho}{\j}*cosd(\tnv@angB),5)}}%
+                {\fpeval{round(\tnv@get{acy}{\j}+\tnv@get{rho}{\j}*sind(\tnv@angB),5)}}%
+                {-1}%
+            }%
+          \fi
+        \fi
+      }%
+    \fi
+  \fi
+  \endgroup
+}
+
+\newcommand{\tnv@resolvebonds}{%
+  \foreach \tnv@bi in {1,...,\the\tnv@nbond}{\tnv@resolvebond{\tnv@bi}}%
+}
+
+% Outline, shading domain, and functional shading of the current tube.
+\newcommand{\tnv@preparetube}{%
+  \colorlet{tnv@tube}{\tnv@bondcolor}%
+  \tnv@buildoutline
+  % A square shading domain centred on the bond.
+  \def\tnv@xmin{100000}\def\tnv@xmax{-100000}%
+  \def\tnv@ymin{100000}\def\tnv@ymax{-100000}%
+  \foreach \k in {0,...,\tnv@lastpt}{%
+    \xdef\tnv@xmin{\fpeval{min(\tnv@xmin,\tnv@get{px}{\k})}}%
+    \xdef\tnv@xmax{\fpeval{max(\tnv@xmax,\tnv@get{px}{\k})}}%
+    \xdef\tnv@ymin{\fpeval{min(\tnv@ymin,\tnv@get{py}{\k})}}%
+    \xdef\tnv@ymax{\fpeval{max(\tnv@ymax,\tnv@get{py}{\k})}}%
+  }%
+  \tnv@fp\tnv@cx{(\tnv@xmin+\tnv@xmax)/2}%
+  \tnv@fp\tnv@cy{(\tnv@ymin+\tnv@ymax)/2}%
+  \tnv@fp\tnv@extent{max(\tnv@xmax-\tnv@xmin,\tnv@ymax-\tnv@ymin)/2+\tnv@R+4}%
+  \tnv@buildtubecode
+  \global\advance\tnv@faceid by 1
+  \edef\tnv@tubename{tnv tube \the\tnv@faceid}%
+  \pgfdeclarefunctionalshading{\tnv@tubename}%
+    {\pgfpoint{-\tnv@extent bp}{-\tnv@extent bp}}%
+    {\pgfpoint{\tnv@extent bp}{\tnv@extent bp}}{}{\tnv@code}%
+}
+
+% ---- Labels ---------------------------------------------------------------
+%
+% A label is placed at a fraction of the visible length of the bond: the
+% parts hidden inside the end glyphs are left out, so .5 is halfway between
+% the two silhouettes.  The point and tangent come from walking the
+% line-and-arc centreline by arc length.  On a tube the label is printed
+% along the axis, turned to stay upright; beside a bond it stays upright and
+% touches the bond's outer edge from the chosen side.
+
+% Point and tangent at arc length #1 -> \tnv@lbx, \tnv@lby, \tnv@lbang.
+\newcommand{\tnv@pointatlength}[1]{%
+  \tnv@fp\tnv@target{#1}%
+  \gdef\tnv@cum{0}\gdef\tnv@found{0}%
+  \foreach \k in {0,...,\tnv@lastseg}{%
+    \ifnum\tnv@found=0
+      \edef\tnv@plen{\tnv@get{plen}{\k}}%
+      \ifnum\fpeval{\tnv@target<=\tnv@cum+\tnv@plen || \k=\tnv@lastseg}=1
+        \tnv@fp\tnv@t{min(max(\tnv@target-\tnv@cum,0),\tnv@plen)}%
+        \xdef\tnv@lbx{\fpeval{round(\tnv@get{sx}{\k}+\tnv@t*\tnv@get{sex}{\k},5)}}%
+        \xdef\tnv@lby{\fpeval{round(\tnv@get{sy}{\k}+\tnv@t*\tnv@get{sey}{\k},5)}}%
+        \xdef\tnv@lbang{\tnv@get{sang}{\k}}%
+        \gdef\tnv@found{1}%
+      \fi
+      \xdef\tnv@cum{\fpeval{\tnv@cum+\tnv@plen}}%
+      \pgfmathtruncatemacro{\j}{\k+1}%
+      \ifnum\j<\tnv@lastpt
+        \ifdim\tnv@get{rho}{\j}pt>0pt
+          \tnv@fp\tnv@alen{\tnv@get{rho}{\j}*abs(\tnv@get{delta}{\j})*pi/180}%
+          \ifnum\fpeval{\tnv@found=0 && \tnv@target<=\tnv@cum+\tnv@alen}=1
+            \tnv@fp\tnv@phi{\tnv@get{a0}{\j}+\tnv@get{delta}{\j}*(\tnv@target-\tnv@cum)/\tnv@alen}%
+            \xdef\tnv@lbx{\fpeval{round(\tnv@get{acx}{\j}+\tnv@get{rho}{\j}*cosd(\tnv@phi),5)}}%
+            \xdef\tnv@lby{\fpeval{round(\tnv@get{acy}{\j}+\tnv@get{rho}{\j}*sind(\tnv@phi),5)}}%
+            \xdef\tnv@lbang{\fpeval{round(\tnv@phi+90*sign(\tnv@get{delta}{\j}),4)}}%
+            \gdef\tnv@found{1}%
+          \fi
+          \xdef\tnv@cum{\fpeval{\tnv@cum+\tnv@alen}}%
+        \fi
+      \fi
+    \fi
+  }%
+}
+
+% Total centreline length -> \tnv@total.
+\newcommand{\tnv@centerlinelength}{%
+  \gdef\tnv@total{0}%
+  \foreach \k in {0,...,\tnv@lastseg}{%
+    \xdef\tnv@total{\fpeval{\tnv@total+\tnv@get{plen}{\k}}}%
+    \pgfmathtruncatemacro{\j}{\k+1}%
+    \ifnum\j<\tnv@lastpt
+      \xdef\tnv@total{\fpeval{\tnv@total
+        +\tnv@get{rho}{\j}*abs(\tnv@get{delta}{\j})*pi/180}}%
+    \fi
+  }%
+}
+
+% Length of the bond hidden inside the glyph at end #1 (a or b), leaving
+% along the page angle #2 -> \tnv@hidden.
+\newcommand{\tnv@hiddenlength}[2]{%
+  \def\tnv@hidden{0}%
+  \edef\tnv@type{\tnv@bget{#1type}}%
+  \ifx\tnv@type\tnv@type@leg\else\ifx\tnv@type\tnv@type@xy\else
+    \edef\tnv@name{\tnv@bget{#1}}%
+    \ifcsname tnv@T@\tnv@name @x\endcsname
+      \tnv@boundary{\tnv@name}{#2}%
+      \let\tnv@hidden\tnv@bt
+    \fi
+  \fi\fi
+}
+
+\newcommand{\tnv@makelabelcode}{%
+  \tnv@bset{label}{}%
+  \ifx\tnv@bondlabel\pgfutil@empty\else
+    \tnv@centerlinelength
+    \tnv@hiddenlength{a}{\tnv@get{sang}{0}}\let\tnv@hida\tnv@hidden
+    \tnv@hiddenlength{b}{\tnv@get{sang}{\tnv@lastseg}+180}\let\tnv@hidb\tnv@hidden
+    \tnv@pointatlength{\tnv@hida+\tnv@labelpos*(\tnv@total-\tnv@hida-\tnv@hidb)}%
+    \ifnum\tnv@labelon=1
+      \tnv@makeonlabel
+    \else
+      \tnv@makebesidelabel
+    \fi
+  \fi
+}
+
+% Printed along the tube axis, upright.
+\newcommand{\tnv@makeonlabel}{%
+  \edef\tnv@rot{\fpeval{\tnv@lbang-360*floor((\tnv@lbang+90)/360)}}%
+  \ifnum\fpeval{\tnv@rot>90}=1\edef\tnv@rot{\fpeval{\tnv@rot-180}}\fi
+  % Default text colour from the brightness of the tube's front.
+  \ifx\tnv@labelcolor\pgfutil@empty
+    \tnv@rgbof{tnv@tube}{lab}%
+    \ifnum\fpeval{.85*(.2126*\tnv@labr+.7152*\tnv@labg+.0722*\tnv@labb)>.45}=1
+      \def\tnv@labelcolor{black}%
+    \else
+      \def\tnv@labelcolor{white!94!black}%
+    \fi
+  \fi
+  \setbox0\hbox{\tnv@labelfont\tnv@bondlabel}%
+  \ifdim\dimexpr\ht0+\dp0\relax>\fpeval{2*\tnv@R}pt
+    \PackageWarning{tnviz}{A bond label is taller than its tube; widen the
+      tube or use label placement=beside}%
+  \fi
+  \tnv@bset{label}{\noexpand\node[inner sep=0pt,rotate=\tnv@rot,
+    text=\tnv@labelcolor,font=\unexpanded\expandafter{\tnv@labelfont}]
+    at (\tnv@lbx pt,\tnv@lby pt) {\unexpanded\expandafter{\tnv@bondlabel}};}%
+}
+
+% Upright, touching the outer edge of the bond from one side.
+\newcommand{\tnv@makebesidelabel}{%
+  \tnv@fp\tnv@nx{-sind(\tnv@lbang)}\tnv@fp\tnv@ny{cosd(\tnv@lbang)}%
+  \ifx\tnv@labelside\tnv@side@right
+    \tnv@fp\tnv@nx{-\tnv@nx}\tnv@fp\tnv@ny{-\tnv@ny}%
+  \else\ifx\tnv@labelside\tnv@side@left\else
+    % Automatic: above, or left of a vertical bond.
+    \ifnum\fpeval{\tnv@ny<-.000001 || (abs(\tnv@ny)<=.000001 && \tnv@nx>0)}=1
+      \tnv@fp\tnv@nx{-\tnv@nx}\tnv@fp\tnv@ny{-\tnv@ny}%
+    \fi
+  \fi\fi
+  \ifx\tnv@labelcolor\pgfutil@empty\def\tnv@labelcolor{black}\fi
+  \pgfmathsetmacro{\tnv@off}{\tnv@hw+\tnv@labeldistance}%
+  \tnv@bset{label}{\noexpand\node[inner sep=0pt,
+    anchor=\fpeval{round(atand(-\tnv@ny,-\tnv@nx),2)},
+    text=\tnv@labelcolor,font=\unexpanded\expandafter{\tnv@labelfont}]
+    at (\fpeval{round(\tnv@lbx+\tnv@off*\tnv@nx,5)}pt,
+        \fpeval{round(\tnv@lby+\tnv@off*\tnv@ny,5)}pt)
+    {\unexpanded\expandafter{\tnv@bondlabel}};}%
+}
+
+% ---- Drawing code used by fragments --------------------------------------
+
+\newcommand{\tnv@drawline}[3]{%
+  \draw[#2,line width=#3,line cap=round,line join=round] #1;%
+}
+\newcommand{\tnv@drawtube}[6]{%
+  \begin{scope}
+    \clip #1;
+    \begin{scope}[transform canvas={shift={(#2pt,#3pt)}}]
+      \pgfuseshading{#4}%
+    \end{scope}
+  \end{scope}
+  \draw[draw=#5,line width=#6,line join=round] #1;%
+}
+% ---- Crossings ------------------------------------------------------------
+%
+% Only needed when some bond hops.  Every pair of bonds is intersected
+% chord by chord.  A crossing inside a glyph (for instance two bonds meeting
+% at the same tensor) is ignored.  Otherwise the bond with the higher scene
+% key is on top; if it hops, a hop is recorded on its straight segment and
+% the bond is rebuilt with the hop inserted.
+
+\ExplSyntaxOn
+\cs_new:Npn \tnv@comparebonds #1#2
+  { \__tnv_compare_keys:vv { tnv@B@#1@key } { tnv@B@#2@key } }
+\ExplSyntaxOff
+
+\newcommand{\tnv@findcrossings}{%
+  \foreach \tnv@bi in {1,...,\the\tnv@nbond}{%
+    \foreach \tnv@bj in {\tnv@bi,...,\the\tnv@nbond}{%
+      \ifnum\tnv@bj>\tnv@bi
+        \tnv@crosspair{\tnv@bi}{\tnv@bj}%
+      \fi
+    }%
+  }%
+  \foreach \tnv@bi in {1,...,\the\tnv@nbond}{%
+    \edef\tnv@hops{\csname tnv@B@\tnv@bi @hops\endcsname}%
+    \ifx\tnv@hops\pgfutil@empty\else
+      \tnv@rebuildbond{\tnv@bi}%
+    \fi
+  }%
+}
+
+\def\tnv@chordwords#1#2#3#4#5{%
+  \def\tnv@xa{#1}\def\tnv@ya{#2}\def\tnv@xb{#3}\def\tnv@yb{#4}\def\tnv@ka{#5}}
+\def\tnv@chordwordsii#1#2#3#4#5{%
+  \def\tnv@xc{#1}\def\tnv@yc{#2}\def\tnv@xd{#3}\def\tnv@yd{#4}\def\tnv@kc{#5}}
+
+\newcommand{\tnv@crosspair}[2]{%
+  \gdef\tnv@lastcross{}%
+  \foreach \m in {1,...,\csname tnv@B@#1@nch\endcsname}{%
+    \expandafter\expandafter\expandafter\tnv@chordwords\csname tnv@B@#1@ch@\m\endcsname
+    \foreach \n in {1,...,\csname tnv@B@#2@nch\endcsname}{%
+      \expandafter\expandafter\expandafter\tnv@chordwordsii\csname tnv@B@#2@ch@\n\endcsname
+      % Bounding boxes first.
+      \ifnum\fpeval{max(\tnv@xa,\tnv@xb)>=min(\tnv@xc,\tnv@xd)
+          && max(\tnv@xc,\tnv@xd)>=min(\tnv@xa,\tnv@xb)
+          && max(\tnv@ya,\tnv@yb)>=min(\tnv@yc,\tnv@yd)
+          && max(\tnv@yc,\tnv@yd)>=min(\tnv@ya,\tnv@yb)}=1
+        \tnv@fp\tnv@rx{\tnv@xb-\tnv@xa}\tnv@fp\tnv@ry{\tnv@yb-\tnv@ya}%
+        \tnv@fp\tnv@sx{\tnv@xd-\tnv@xc}\tnv@fp\tnv@sy{\tnv@yd-\tnv@yc}%
+        \tnv@fp\tnv@den{\tnv@rx*\tnv@sy-\tnv@ry*\tnv@sx}%
+        \ifnum\fpeval{abs(\tnv@den)>.0001}=1
+          \tnv@fp\tnv@qx{\tnv@xc-\tnv@xa}\tnv@fp\tnv@qy{\tnv@yc-\tnv@ya}%
+          \edef\tnv@t{\fpeval{(\tnv@qx*\tnv@sy-\tnv@qy*\tnv@sx)/\tnv@den}}%
+          \edef\tnv@u{\fpeval{(\tnv@qx*\tnv@ry-\tnv@qy*\tnv@rx)/\tnv@den}}%
+          \ifnum\fpeval{\tnv@t>=0 && \tnv@t<=1 && \tnv@u>=0 && \tnv@u<=1}=1
+            \tnv@fp\tnv@px{\tnv@xa+\tnv@t*\tnv@rx}%
+            \tnv@fp\tnv@py{\tnv@ya+\tnv@t*\tnv@ry}%
+            \tnv@crossing{#1}{#2}%
+          \fi
+        \fi
+      \fi
+    }%
+  }%
+}
+
+% Handle a crossing of bonds #1 and #2 at (\tnv@px,\tnv@py).
+\newcommand{\tnv@crossing}[2]{%
+  \def\tnv@keep{1}%
+  % The same crossing reported by two adjacent chords.
+  \ifx\tnv@lastcross\pgfutil@empty\else
+    \expandafter\tnv@lastcrosswords\tnv@lastcross
+    \ifnum\fpeval{abs(\tnv@px-\tnv@lx)+abs(\tnv@py-\tnv@ly)<1}=1
+      \def\tnv@keep{0}%
+    \fi
+  \fi
+  \ifnum\tnv@keep=1
+    \xdef\tnv@lastcross{{\tnv@px}{\tnv@py}}%
+    \tnv@fp\tnv@hwmax{max(\csname tnv@B@#1@hw\endcsname,\csname tnv@B@#2@hw\endcsname)}%
+    \tnv@insideanyglyph
+    \ifnum\tnv@inside=0
+      \ifnum\tnv@comparebonds{#1}{#2}>0
+        \edef\tnv@up{#1}\edef\tnv@down{#2}\let\tnv@upk\tnv@ka
+      \else
+        \edef\tnv@up{#2}\edef\tnv@down{#1}\let\tnv@upk\tnv@kc
+      \fi
+      \edef\tnv@mode{\csname tnv@B@\tnv@up @crossing\endcsname}%
+      \ifx\tnv@mode\tnv@crossing@hop
+        \ifnum\tnv@upk<0
+          \PackageWarning{tnviz}{A crossing on a bend cannot hop; it is left alone}%
+        \else
+          \expandafter\xdef\csname tnv@B@\tnv@up @hops\endcsname{%
+            \csname tnv@B@\tnv@up @hops\endcsname
+            {\tnv@upk}{\tnv@px}{\tnv@py}{\csname tnv@B@\tnv@down @hw\endcsname}}%
+        \fi
+      \fi
+    \fi
+  \fi
+}
+\def\tnv@lastcrosswords#1#2{\def\tnv@lx{#1}\def\tnv@ly{#2}}
+
+% ---- Hops -----------------------------------------------------------------
+%
+% A hop at c on segment k (direction e) of the upper bond replaces the
+% crossing by the points
+%
+%   c - h e,  c - h e + (h+r) n,  c + h e + (h+r) n,  c + h e,
+%
+% where n is the segment normal pointing up (or left).  The two upper points
+% get fillets of radius h, which join into one semicircle about c + r n; the
+% two base points get fillets of radius r: 0 for a line (a sharp corner, as
+% in circuit diagrams) and the bend radius for a tube, which cannot kink.
+% The default h clears the lower bond: 1.4 times both half widths plus 1pt,
+% at least 1.5mm.
+
+\ExplSyntaxOn
+\seq_new:N \l__tnv_hops_seq
+\cs_new:Npn \__tnv_hop_distance:nnnnn #1#2#3#4#5 {#1}
+\cs_new:Npn \__tnv_braced:n #1 { \exp_not:n { {#1} } }
+% Sort the hop items {distance}{x}{y}{h} of \tnv@seghops by distance into
+% \tnv@seghops.
+\cs_new_protected:Npn \tnv@sorthops
+  {
+    \seq_clear:N \l__tnv_hops_seq
+    \exp_last_unbraced:No \__tnv_hops_collect:w \tnv@seghops \q_recursion_tail \q_recursion_stop
+    \seq_sort:Nn \l__tnv_hops_seq
+      {
+        \fp_compare:nNnTF { \__tnv_hop_distance:nnnnn ##1 } >
+                          { \__tnv_hop_distance:nnnnn ##2 }
+          { \sort_return_swapped: } { \sort_return_same: }
+      }
+    \tl_set:Nx \tnv@seghops
+      { \seq_map_function:NN \l__tnv_hops_seq \__tnv_braced:n }
+  }
+\cs_new_protected:Npn \__tnv_hops_collect:w #1
+  {
+    \quark_if_recursion_tail_stop:n {#1}
+    \seq_put_right:Nn \l__tnv_hops_seq {#1}
+    \__tnv_hops_collect:w
+  }
+\ExplSyntaxOff
+
+\def\tnv@ptwords#1#2{\def\tnv@ptx{#1}\def\tnv@pty{#2}}
+\def\tnv@hopwords#1#2#3#4{\def\tnv@hk{#1}\def\tnv@hx{#2}\def\tnv@hy{#3}\def\tnv@hwl{#4}}
+\def\tnv@shopwords#1#2#3#4#5{\def\tnv@hd{#1}\def\tnv@hx{#2}\def\tnv@hy{#3}\def\tnv@hh{#4}}
+
+% Rebuild bond #1 from its stored points with its hops inserted.
+\newcommand{\tnv@rebuildbond}[1]{%
+  \begingroup
+  \tnv@loadbondopts{#1}%
+  \ifnum\tnv@istube=1\let\tnv@hopbase\tnv@bend\else\def\tnv@hopbase{0}\fi
+  % Points into \tnv@P@<i>.
+  \def\tnv@npts{0}%
+  \expandafter\expandafter\expandafter\tnv@loadpts
+    \csname tnv@B@#1@pts\endcsname\relax\relax
+  \pgfmathtruncatemacro{\tnv@lastp}{\tnv@npts-1}%
+  \gdef\tnv@np{0}%
+  \foreach \k in {0,...,\tnv@lastp}{%
+    \expandafter\expandafter\expandafter\tnv@ptwords\csname tnv@P@\k\endcsname
+    \tnv@addxy{\tnv@ptx}{\tnv@pty}%
+    \ifnum\k<\tnv@lastp
+      \pgfmathtruncatemacro{\j}{\k+1}%
+      \expandafter\expandafter\expandafter\tnv@nextwords\csname tnv@P@\j\endcsname
+      \tnv@fp\tnv@sdx{\tnv@nx-\tnv@ptx}\tnv@fp\tnv@sdy{\tnv@ny-\tnv@pty}%
+      \tnv@fp\tnv@slen{sqrt(\tnv@sdx*\tnv@sdx+\tnv@sdy*\tnv@sdy)}%
+      \tnv@fp\tnv@ex{\tnv@sdx/\tnv@slen}\tnv@fp\tnv@ey{\tnv@sdy/\tnv@slen}%
+      % The hop normal points up, or left on a vertical segment.
+      \tnv@fp\tnv@nnx{-\tnv@ey}\tnv@fp\tnv@nny{\tnv@ex}%
+      \ifnum\fpeval{\tnv@nny<-.000001 || (abs(\tnv@nny)<=.000001 && \tnv@nnx>0)}=1
+        \tnv@fp\tnv@nnx{-\tnv@nnx}\tnv@fp\tnv@nny{-\tnv@nny}%
+      \fi
+      % This segment's hops, with their distance from P_k and radius.
+      \def\tnv@seghops{}%
+      \expandafter\expandafter\expandafter\tnv@collecthops
+        \csname tnv@B@#1@hops\endcsname\relax\relax\relax\relax
+      \ifx\tnv@seghops\pgfutil@empty\else
+        \tnv@sorthops
+        \expandafter\tnv@inserthops\tnv@seghops\relax\relax\relax\relax\relax
+      \fi
+    \fi
+  }%
+  \tnv@makebondcode
+  \endgroup
+}
+\def\tnv@nextwords#1#2{\def\tnv@nx{#1}\def\tnv@ny{#2}}
+
+\def\tnv@loadpts#1#2{%
+  \ifx\relax#1\else
+    \expandafter\def\csname tnv@P@\tnv@npts\endcsname{{#1}{#2}}%
+    \pgfmathtruncatemacro{\tnv@npts}{\tnv@npts+1}%
+    \expandafter\tnv@loadpts
+  \fi}
+
+% Keep the hops of segment \k, as {distance}{x}{y}{h}{}.
+\def\tnv@collecthops#1#2#3#4{%
+  \ifx\relax#1\else
+    \ifnum#1=\k
+      \tnv@fp\tnv@hd{(#2-\tnv@ptx)*\tnv@ex+(#3-\tnv@pty)*\tnv@ey}%
+      \ifx\tnv@hopradius\pgfutil@empty
+        \pgfmathsetmacro{\tnv@hh}{max(1.5mm,1.4*(#4+\tnv@bget{hw})+1pt)}%
+      \else
+        \pgfmathsetmacro{\tnv@hh}{\tnv@hopradius}%
+      \fi
+      \edef\tnv@seghops{\tnv@seghops{{\tnv@hd}{#2}{#3}{\tnv@hh}{}}}%
+    \fi
+    \expandafter\tnv@collecthops
+  \fi}
+
+\def\tnv@inserthops#1{%
+  \ifx\relax#1\else
+    \tnv@shopwords#1%
+    \tnv@inserthop
+    \expandafter\tnv@inserthops
+  \fi}
+
+\newcommand{\tnv@inserthop}{%
+  \tnv@fp\tnv@hr{\tnv@hopbase}%
+  \ifnum\fpeval{\tnv@hd-\tnv@hh-\tnv@hr>0 && \tnv@hd+\tnv@hh+\tnv@hr<\tnv@slen}=1
+    \def\tnv@nextclamp{1}%
+    \let\tnv@nextbend\tnv@hr
+    \tnv@addxy{\tnv@hx-\tnv@hh*\tnv@ex}{\tnv@hy-\tnv@hh*\tnv@ey}%
+    \let\tnv@nextbend\tnv@hh
+    \tnv@addxy{\tnv@hx-\tnv@hh*\tnv@ex+(\tnv@hh+\tnv@hr)*\tnv@nnx}%
+      {\tnv@hy-\tnv@hh*\tnv@ey+(\tnv@hh+\tnv@hr)*\tnv@nny}%
+    \tnv@addxy{\tnv@hx+\tnv@hh*\tnv@ex+(\tnv@hh+\tnv@hr)*\tnv@nnx}%
+      {\tnv@hy+\tnv@hh*\tnv@ey+(\tnv@hh+\tnv@hr)*\tnv@nny}%
+    \let\tnv@nextbend\tnv@hr
+    \tnv@addxy{\tnv@hx+\tnv@hh*\tnv@ex}{\tnv@hy+\tnv@hh*\tnv@ey}%
+    \def\tnv@nextbend{}\def\tnv@nextclamp{}%
+  \else
+    \PackageWarning{tnviz}{A hop does not fit on its segment; the crossing is
+      left alone}%
+  \fi
+}
+
+% Is (\tnv@px,\tnv@py) inside a glyph of this picture, with the margin
+% \tnv@hwmax?  -> \tnv@inside
+\newcommand{\tnv@insideanyglyph}{%
+  \gdef\tnv@inside{0}%
+  \ifx\tnv@glyphlist\pgfutil@empty\else
+    \expandafter\tnv@insideloop\tnv@glyphlist\relax
+  \fi
+}
+\def\tnv@insideloop#1{%
+  \ifx\relax#1\else
+    \tnv@insideglyph{#1}\expandafter\tnv@insideloop
+  \fi}
+\newcommand{\tnv@insideglyph}[1]{%
+  \tnv@fp\tnv@gx{\tnv@px-\tnv@tget{#1}{x}}%
+  \tnv@fp\tnv@gy{\tnv@py-\tnv@tget{#1}{y}}%
+  \tnv@fp\tnv@gd{sqrt(\tnv@gx*\tnv@gx+\tnv@gy*\tnv@gy)}%
+  % Cheap rejection by the glyph's circumscribed radius.
+  \ifnum\fpeval{\tnv@gd<\tnv@tget{#1}{hw}+\tnv@tget{#1}{hh}+\tnv@hwmax}=1
+    \ifnum\fpeval{\tnv@gd<.01}=1
+      \gdef\tnv@inside{1}%
+    \else
+      \tnv@boundary{#1}{\fpeval{atand(\tnv@gy,\tnv@gx)}}%
+      \ifnum\fpeval{\tnv@gd<\tnv@bt+\tnv@hwmax}=1
+        \gdef\tnv@inside{1}%
+      \fi
+    \fi
+  \fi
+}
+
+\makeatother

@@ -1,8 +1,7 @@
 # Files between LaTeX and the engine
 
-Status: draft, 2026-09-22.  The runtime protocol (section 3) is implemented
-by the TikZ backend (`tnviz tikz`) and `tex/tnviz-runtime.sty`; `.tnvm` and
-`tnviz tex` are not yet.
+Status: implemented, 2026-09-22: `tex/tnviz.sty` (the LaTeX interface),
+`tex/tnviz-runtime.sty` (the runtime), and `tnviz tex` (the engine side).
 
 LaTeX and `tnviz` exchange three kinds of files.  LaTeX never interprets tnv,
 and `tnviz` never typesets text or resolves colours.
@@ -25,7 +24,9 @@ The workflow is the same as for BibTeX or biber:
    box of its estimated size, with a warning to run `tnviz`.
 2. **`tnviz tex <job>`.**  Reads `.tnvm`, lays out and computes every figure,
    and writes the `.tikz` files.  Labels not measured yet get estimated sizes.
-   Every label records in the `.tikz` file the size that geometry used.
+   Every label records in the `.tikz` file the size that geometry used.  A
+   `.tikz` file is rewritten only when its content changes, and a figure
+   that fails is reported without stopping the others.
 3. **LaTeX.**  Draws the `.tikz` files.  The runtime typesets every label,
    writes its size to `.tnvm`, and warns "label sizes changed; rerun tnviz"
    if any size differs from the one recorded by more than 0.01pt.
@@ -42,7 +43,7 @@ with `%` are comments.
 
 ```
 tnvm 1
-figure mps unit=28.45274 source=paper-mps.tnv
+figure mps unit=28.45274 em=10 source=paper-mps.tnv
 label mps t:A[1] 7.52 6.83 0
 label mps b:_link[3] 5.71 4.31 1.94
 ```
@@ -50,8 +51,12 @@ label mps b:_link[3] 5.71 4.31 1.94
 | Record | Fields |
 |---|---|
 | `tnvm <version>` | the format version, first line |
-| `figure <figure> unit=<pt> source=<file>` | one figure: the size of one layout unit, and its tnv file |
+| `figure <figure> unit=<pt> em=<pt> source=<file>` | one figure: the size of one layout unit, the em of the font around it (lengths in em, such as label padding, use it), and its tnv file, the rest of the line |
 | `label <figure> <id> <width> <height> <depth>` | the typeset box of one label |
+
+A figure name contains only letters, digits, `-`, `_`, and `.`, because it
+is part of file names.  LaTeX rewrites the whole file on every run; source
+paths are relative to the directory of the `.tnvm` file.
 
 Label ids are stable across runs:
 

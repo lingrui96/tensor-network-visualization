@@ -86,19 +86,19 @@
 % turns them into page coordinates in layout units.
 \newcommand{\tnvShade}[5]{%
   \global\advance\tnv@shading by 1
-  \edef\tnv@name{tnv shading \the\tnv@shading}%
+  \edef\tnv@shadingname{tnv shading \the\tnv@shading}%
   \pgfmathsetmacro\tnv@extent{#4*\tnv@unit}%
   \edef\tnv@code{%
     exch \tnv@bpscale\space mul #2 add
     exch \tnv@bpscale\space mul #3 add
     #5}%
-  \pgfdeclarefunctionalshading{\tnv@name}%
+  \pgfdeclarefunctionalshading{\tnv@shadingname}%
     {\pgfpoint{-\tnv@extent bp}{-\tnv@extent bp}}%
     {\pgfpoint{\tnv@extent bp}{\tnv@extent bp}}{}{\tnv@code}%
   \begin{scope}
     \clip #1;
     \begin{scope}[transform canvas={shift={(#2,#3)}}]
-      \pgfuseshading{\tnv@name}%
+      \pgfuseshading{\tnv@shadingname}%
     \end{scope}
   \end{scope}%
 }
@@ -123,6 +123,8 @@
   \tnv@textcolour{#7}%
   \tnv@text
 }
+% The label is measured in a box, but typeset again in the node: a box
+% keeps the colour it was built in.
 \def\tnv@text#1#2#3#4{%
   \sbox\tnv@box{\tnv@font#4}%
   \edef\tnv@w{\strip@pt\wd\tnv@box}%
@@ -131,7 +133,7 @@
   \tnvMeasured{\tnv@id}{\tnv@w}{\tnv@h}{\tnv@d}%
   \tnv@differs{\tnv@w}{#1}\tnv@differs{\tnv@h}{#2}\tnv@differs{\tnv@d}{#3}%
   \node[inner sep=0pt, outer sep=0pt, anchor=\tnv@anchor, rotate=\tnv@angle, text=tnv@text]
-    at (\tnv@x,\tnv@y) {\usebox\tnv@box};%
+    at (\tnv@x,\tnv@y) {\tnv@font#4};%
 }
 \AtEndDocument{%
   \iftnv@sizeschanged

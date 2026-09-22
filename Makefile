@@ -4,8 +4,8 @@ PREVIEW_DIR := .preview
 
 preview:
 	mkdir -p $(PREVIEW_DIR)
-	TEXINPUTS=tex: lualatex -interaction=nonstopmode -halt-on-error -output-directory=$(PREVIEW_DIR) examples/effects.tex
-	TEXINPUTS=tex: lualatex -interaction=nonstopmode -halt-on-error -output-directory=$(PREVIEW_DIR) examples/bonds.tex
+	TEXINPUTS=tex/prototype: lualatex -interaction=nonstopmode -halt-on-error -output-directory=$(PREVIEW_DIR) examples/effects.tex
+	TEXINPUTS=tex/prototype: lualatex -interaction=nonstopmode -halt-on-error -output-directory=$(PREVIEW_DIR) examples/bonds.tex
 	pdftoppm -png -r 220 $(PREVIEW_DIR)/effects.pdf $(PREVIEW_DIR)/effect
 	mv $(PREVIEW_DIR)/effect-1.png $(PREVIEW_DIR)/orb.png
 	mv $(PREVIEW_DIR)/effect-2.png $(PREVIEW_DIR)/rounded-rectangle.png
@@ -40,3 +40,19 @@ runtime-preview:
 	cp tex/runtime-preview.tex $(PREVIEW_DIR)/runtime/
 	cd $(PREVIEW_DIR)/runtime && TEXINPUTS=../../tex: pdflatex -interaction=nonstopmode -halt-on-error runtime-preview.tex > /dev/null
 	pdftoppm -r 150 -png $(PREVIEW_DIR)/runtime/runtime-preview.pdf $(PREVIEW_DIR)/runtime/page
+
+.PHONY: paper
+
+# examples/paper.tex through LaTeX and tnviz until the label sizes settle.
+PAPER := $(PREVIEW_DIR)/paper
+paper:
+	mkdir -p $(PAPER)
+	cargo build -q -p tnviz-cli
+	cp examples/paper.tex $(PAPER)/
+	cp -r examples/tnv $(PAPER)/
+	cd $(PAPER) && for run in 1 2 3 4; do \
+	  TEXINPUTS=../../tex: pdflatex -interaction=nonstopmode -halt-on-error paper.tex > /dev/null || exit 1; \
+	  grep -q "rerun tnviz\|not computed yet" paper.log || break; \
+	  ../../target/debug/tnviz tex paper || exit 1; \
+	done
+	pdftoppm -r 150 -png $(PAPER)/paper.pdf $(PAPER)/page

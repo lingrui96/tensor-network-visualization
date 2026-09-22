@@ -18,6 +18,7 @@ mod name;
 mod order;
 mod registry;
 mod tikz;
+mod tnvm;
 mod value;
 
 #[cfg(feature = "debug-svg")]
@@ -44,6 +45,7 @@ pub use name::{Name, NamePattern, SubPattern};
 pub use order::{Class, Fragment, Key, Part, Pass, order};
 pub use registry::{Category, Target, category};
 pub use tikz::{PROTOCOL, tikz};
+pub use tnvm::{TNVM_VERSION, TnvmFigure, parse_tnvm};
 pub use value::{Attr, Value, merge_attrs};
 
 #[cfg(feature = "debug-svg")]

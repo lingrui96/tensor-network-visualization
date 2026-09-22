@@ -1,0 +1,26 @@
+% tnv figures in a LaTeX document: `make paper` runs LaTeX, tnviz, and LaTeX
+% until the label sizes settle.
+\documentclass{article}
+\usepackage{tnviz}
+
+\begin{document}
+
+A matrix product state, written in the document:
+
+\begin{tnvfigure}[name=mps]
+chain A[1..5]
+A[*]: leg down
+A[3] - A[4]  [label=$\chi$]
+\end{tnvfigure}
+
+A figure from a file, at a smaller unit, and one without a name:
+
+\tnvinput[unit=8mm]{tnv/peps.tnv}
+
+\begin{tnvfigure}
+A at (0, 0); B at (3, 0)
+A [shape=orb, color=teal]
+A - B [tube, label=$\alpha$]
+\end{tnvfigure}
+
+\end{document}

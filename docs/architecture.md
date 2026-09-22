@@ -157,7 +157,8 @@ changes nothing outside tnv figures.
 
 ### 4.3 The prototype package
 
-`tex/tnviz.sty` is the prototype that preceded this architecture.  Until the
+`tex/prototype/tnviz.sty` is the prototype that preceded this architecture;
+it moved there when `tex/tnviz.sty` became the LaTeX interface.  Until the
 engine's geometry and TikZ backend can replace it:
 
 - it is frozen: no new features and no changes to its rules;
@@ -225,8 +226,8 @@ leaves sizes and leg lengths to geometry), E5 (the `spacing` statement), E6
 changes only through checked operations), E7 (`LayoutStmt` and
 `Placement`).  E8 is in progress: the geometry and order stages are built
 for 2D, the lighting model is built and documented in docs/lighting.md,
-and the TikZ backend writes the runtime protocol; the `.tnvm` input, the
-LaTeX interface, and resolved printing remain.
+the TikZ backend writes the runtime protocol, and `tnviz tex` reads
+`.tnvm`; resolved printing remains.
 
 ### 6.3 CLI (crates/tnviz-cli)
 
@@ -236,7 +237,7 @@ LaTeX interface, and resolved printing remain.
 
 Resolved: `debug_svg` is a backend module behind the `debug-svg` feature.
 
-### 6.4 TeX layer (tex/tnviz.sty)
+### 6.4 TeX layer (the prototype, now tex/prototype/tnviz.sty)
 
 The prototype is a complete renderer with its own user interface, so it plays
 the language, the engine, and the runtime.
@@ -253,6 +254,13 @@ the language, the engine, and the runtime.
 
 Placed correctly: resolving colour expressions with xcolor, including
 document colours, and typesetting text in the document's fonts.
+
+Resolved by the new TeX layer, which replaces the prototype rather than
+changing it: T1–T4 and T7 (`tex/tnviz-runtime.sty` has no vocabulary,
+geometry, ordering, or lighting of its own; it evaluates the engine's
+output), T5 (the runtime and `tex/tnviz.sty` act only inside tnv figures),
+and T6 (`tnvfigure`, `\tnvinput`, label measurement through `.tnvm`, and
+the runtime protocol).
 
 ### 6.5 Repository
 
