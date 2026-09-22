@@ -293,7 +293,6 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
                             l.width / 2.0,
                             slot,
                             light3,
-                            [l.junctions[0].is_some(), l.junctions[1].is_some()],
                         )
                     } else {
                         tube_shading(&l.centerline.pieces, outline.sample(0.2), l.width / 2.0, slot, light)
@@ -703,9 +702,6 @@ fn patch_shading(patch: &Patch, slot: usize, l: V3) -> Shading {
 
 /// A tube in 3D: as `tube_shading`, but across each piece the normal turns
 /// from the page towards the viewer about that piece's 3D axis.
-///
-/// At an end that meets a tensor (`inside`), the tube runs on into it, so
-/// that points near where it meets the surface take normals across the tube.
 fn tube_shading3(
     pieces: &[Piece],
     axes: &[V3],
@@ -713,21 +709,7 @@ fn tube_shading3(
     radius: f64,
     slot: usize,
     l: V3,
-    inside: [bool; 2],
 ) -> Shading {
-    let mut pieces = pieces.to_vec();
-    let n = pieces.len();
-    if inside[0]
-        && let Some(Piece::Line { a, b }) = pieces.first_mut()
-    {
-        *a = *a - (*b - *a).unit().unwrap_or(V3::ZERO) * (2.0 * radius);
-    }
-    if inside[1]
-        && let Some(Piece::Line { a, b }) = pieces.get_mut(n.wrapping_sub(1))
-    {
-        *b = *b + (*b - *a).unit().unwrap_or(V3::ZERO) * (2.0 * radius);
-    }
-    let pieces = &pieces;
     let (x, y) = (Expr::X, Expr::Y);
     let mut p = Program::new();
     let (mut bx, mut by, mut bd) = (c(0.0), c(0.0), c(FAR));

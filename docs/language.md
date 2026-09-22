@@ -816,12 +816,11 @@ these names are errors in a 2D scene.
 - Centrelines are built as in section 8.3, in 3D: exit points use the 3D
   boundary distance, and every bend is a circular arc in the plane of its
   corner.  Open legs are as in section 8.5.
-- A centreline is cut where it enters its end tensors, so that no line runs
-  inside a solid; the visible part is what remains.  A tube ends there not
-  in a cap but in the curve where its wall meets the tensor's surface, so
-  that it looks inserted into the tensor: on the page, the part of that
-  curve on the wall's half facing the viewer, stroked as the tube's
-  outline.  Only a leg's free end has a cap.
+- A line runs from its tensors' centres, as in 2D; where it is inside a
+  tensor, the tensor hides it (section 11.7), so a tube looks inserted into
+  its tensor, meeting its surface along their true intersection.  The
+  **visible part** of a line, along which labels and arrows are placed, is
+  what lies outside its end tensors.
 - A **line** is drawn as its projected centreline with its width in `em`,
   whatever its depth.  A **tube** is the solid of points within `width` / 2
   of the centreline; under the orthographic view its outline is the
@@ -867,23 +866,44 @@ plane W at (0, 0, -2) [width=8, height=6]     // placed explicitly
   sheet (default .18; its edge is drawn at 2.5 times that, at most 1), `z`,
   `corner-radius`, `padding` (for `under`), and `width`, `height`, and
   `rotate` (for `at`).  Labels on planes are not specified yet.
-- **Order.**  A plane passes through what it meets, and what is behind it
-  is seen through it:
-  - a line that crosses a plane is split where it crosses;
-  - a tensor that a plane cuts, such as the tensors of the group a plane is
-    fitted `under`, is drawn whole behind the plane and again, in front of
-    it, where its visible surface is nearer than the plane;
-  - a tube lying in a plane is cut along its length the same way: the half
-    of its wall above the plane is drawn again in front of it.
+- A plane is translucent: what is behind it shows through it, and what is
+  in front of it is not covered by it (section 11.7).
 
 ### 11.7 Drawing order
 
-The key of section 8.9 is used with its depth: pieces are drawn from far to
-near.  Lines are split where needed for a single order to exist: where their
-projections cross other lines or silhouettes and the depth order changes
-along them, and where they cross planes.  Opacity (section 8.9) and
-shadows are as in 2D: a shadow is the soft drop shadow of section 3.1 of
-docs/lighting.md, offset on the page away from the light.
+In 3D the engine resolves which surface is in front at every point of the
+page, whatever the shapes, from two things each drawn object gives: its
+region on the page, and the depth of its front surface at each point of it.
+Tensors, lines, arrows, and planes are all resolved the same way:
+
+1. **Shadows** come first: they are on the paper, under everything.
+2. **Objects** (tensors and lines, with their arrows) are drawn in order of the depth of their centres, far first.
+   Where two objects overlap on the page and the one drawn first is nearer
+   at some points, the one drawn later has a **hole** there: it is not
+   drawn where the other is in front of it.  So bonds that enter a tensor
+   are hidden inside it, and a tube that crosses another or passes behind a
+   tensor is covered where it should be, with no splitting of lines.
+3. **Planes** are drawn last, far first, each with a hole wherever an
+   object, or an earlier plane, is nearer than it.  What lies behind a
+   plane is therefore seen through it, and what lies in front, or on its
+   near side of an intersection, is not covered by it: a plane through the
+   centres of a layer's tensors cuts them along their intersection with it.
+4. **Labels** are drawn above everything, far first.  Each is a card
+   facing the viewer at the depth of what it is printed on: a tensor's
+   label at the tensor's front surface where the label is, a label on a
+   line at the line's front surface, and a label beside a line at the
+   depth of the nearest point of the line.  A card is covered only by
+   tensors nearer than it, never by its own tensor, by lines, or by
+   planes: so a bond that leaves a tensor towards the viewer does not hide
+   the tensor's name, but a tensor in front of another hides its name as
+   it hides its body.
+
+A hole is found on a grid over the two regions' overlap and refined where
+the depth order changes, so it follows intersections of curved surfaces.
+It reaches a little past the later object's region, so that its outline
+is cut with it.
+Opacity (section 8.9) is as in 2D, and a shadow is the soft drop shadow of
+section 3.1 of docs/lighting.md, offset on the page away from the light.
 
 ### 11.8 Light
 

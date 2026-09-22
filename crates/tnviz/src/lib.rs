@@ -27,8 +27,8 @@ mod debug_svg;
 
 pub use error::{Error, Pos, Result};
 pub use geometry::{
-    Anchor, ArrowGeom, Cap, Crossing, Front, Geometry, GeometryOptions, LabelGeom, LabelOwner, LabelSizes,
-    LabelText, LineGeom, LineKind, LineStyle, Patch, Path, Piece, PlaneGeom, Shape, Span, TensorGeom, View,
+    Anchor, ArrowGeom, Cap, Crossing, Drawn, Geometry, GeometryOptions, LabelGeom, LabelOwner, LabelSizes,
+    LabelText, LineGeom, LineKind, LineStyle, Patch, Path, Piece, PlaneGeom, Shape, TensorGeom, View,
     geometry,
 };
 pub use lang::{VERSION, parse, to_tnv};

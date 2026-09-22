@@ -5,6 +5,7 @@
 //! Lighting and drawing order are later stages; this one only builds
 //! shapes.  Only 2D scenes are specified.
 
+mod compose;
 mod path;
 mod shape;
 mod solid;
@@ -12,10 +13,9 @@ mod space;
 
 use std::collections::{BTreeMap, HashMap};
 
-pub use path::{Cap, Path, Piece, tube_region, tube_sides};
+pub use path::{Cap, Path, Piece};
 pub use shape::Shape;
 pub use solid::{Patch, View, edge_toward};
-pub(crate) use solid::{clip_convex, clip_polyline_convex};
 
 use crate::error::{Error, Result};
 use crate::layout::{Placement, Route, V3};
@@ -76,21 +76,17 @@ pub struct TensorGeom {
     /// surface in drawing order.  0 and empty in 2D.
     pub depth: f64,
     pub patches: Vec<Patch>,
-    /// In 3D, its layer among the planes (section 11.7); 0 in 2D.
-    pub layer: u32,
-    /// In 3D, when a plane cuts it: the part of it in front of the plane,
-    /// drawn again there over the whole, which is behind.
-    pub front: Option<Front>,
+    /// In 3D, where it is drawn (section 11.7).
+    pub drawn: Drawn,
 }
 
-/// The part of an object in front of a plane that cuts it: a convex region
-/// of the page, and its layer.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Front {
-    pub region: Path,
-    pub layer: u32,
-    /// For a tube: whether its left and right sides are in the region.
-    pub sides: [bool; 2],
+/// In 3D, an object's place in the drawing order and its holes: sets of
+/// loops, wound clockwise, where something drawn before it is in front of
+/// it (section 11.7).  In 2D, rank 0 and no holes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Drawn {
+    pub rank: u32,
+    pub holes: Vec<Vec<Path>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,27 +119,10 @@ pub struct LineGeom {
     /// The arrow (section 8.11).
     pub arrow: Option<ArrowGeom>,
     /// In 3D: the direction in view coordinates of each piece of the
-    /// centreline, and the spans the line is drawn in, each at one depth
-    /// (section 11.7).  Empty in 2D.
+    /// centreline.  Empty in 2D.
     pub axes: Vec<V3>,
-    pub spans: Vec<Span>,
-    /// In 3D, for a tube: where it meets its tensors on the page, at its
-    /// start and end (see `tube_region`).  None in 2D, where tensors cover
-    /// the ends of their lines.
-    pub junctions: [Option<Vec<V3>>; 2],
-    /// In 3D, for each span of a tube lying in a plane: its half in front.
-    pub fronts: Vec<Option<Front>>,
-}
-
-/// A part of a line, by arc length, drawn at one depth.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Span {
-    pub from: f64,
-    pub to: f64,
-    /// Larger is nearer.
-    pub depth: f64,
-    /// Its layer among the planes (section 11.7).
-    pub layer: u32,
+    /// In 3D, where it is drawn (section 11.7).
+    pub drawn: Drawn,
 }
 
 /// An arrow on or beside a line (section 8.11).
@@ -209,6 +188,8 @@ pub struct LabelGeom {
     pub size: (f64, f64, f64),
     /// Whether the size was measured, rather than estimated.
     pub measured: bool,
+    /// In 3D, its place among the labels and what covers it.
+    pub drawn: Drawn,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -229,6 +210,8 @@ pub struct Geometry {
     pub crossings: Vec<Crossing>,
     /// In 3D, the planes of section 11.6, indexed like `Network::planes`.
     pub planes: Vec<PlaneGeom>,
+    /// In 3D, a rectangle round everything drawn, for clipping out holes.
+    pub frame: Option<(V3, V3)>,
     pub warnings: Vec<String>,
 }
 
@@ -238,8 +221,7 @@ pub struct PlaneGeom {
     pub outline: Path,
     /// The depth of its centre (larger is nearer).
     pub depth: f64,
-    /// Its place among the layers the planes cut space into (section 11.7).
-    pub layer: u32,
+    pub drawn: Drawn,
 }
 
 /// Build the geometry of a placed network.
@@ -293,7 +275,7 @@ pub fn geometry(
             line.outline = Some(tube_outline(&line.centerline.slice(s0, s1), line.width / 2.0, caps));
         }
     }
-    Ok(Geometry { tensors, lines, labels, crossings, planes: Vec::new(), warnings: g.warnings })
+    Ok(Geometry { tensors, lines, labels, crossings, planes: Vec::new(), frame: None, warnings: g.warnings })
 }
 
 /// A hop to insert on a polyline segment.
@@ -506,8 +488,7 @@ impl Builder<'_> {
                 outline: local.transformed(placed.rotation, placed.pos),
                 depth: 0.0,
                 patches: Vec::new(),
-                layer: 0,
-                front: None,
+                drawn: Drawn::default(),
             });
             if let Some(((size, measured), text)) = label {
                 labels.push(LabelGeom {
@@ -520,6 +501,7 @@ impl Builder<'_> {
                     anchor: Anchor::Center,
                     size,
                     measured,
+                    drawn: Drawn::default(),
                 });
             }
         }
@@ -596,9 +578,7 @@ impl Builder<'_> {
                 visible: (0.0, 0.0),
                 arrow: None,
                 axes: Vec::new(),
-                spans: Vec::new(),
-                junctions: [None, None],
-                fronts: Vec::new(),
+                drawn: Drawn::default(),
             },
             vertices,
             filleted,
@@ -687,9 +667,7 @@ impl Builder<'_> {
             visible: (0.0, 0.0),
             arrow: None,
             axes: Vec::new(),
-            spans: Vec::new(),
-            junctions: [None, None],
-            fronts: Vec::new(),
+            drawn: Drawn::default(),
         }
     }
 
@@ -1057,6 +1035,7 @@ impl Builder<'_> {
             anchor,
             size,
             measured,
+            drawn: Drawn::default(),
         })
     }
 
@@ -1099,6 +1078,7 @@ impl Builder<'_> {
                 anchor: Anchor::Toward(-normal),
                 size,
                 measured,
+                drawn: Drawn::default(),
             });
         }
         out
