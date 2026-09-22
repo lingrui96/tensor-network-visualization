@@ -76,8 +76,8 @@ goal.
 6. **Relative units:** the language knows neither centimetres nor pixels; the
    outer layer decides the size of one unit.
 7. **Round trip:** the compiler can print any .tnv file in a canonical form.
-8. **Not a general programming language:** only arrays, ranges, and
-   wildcards; complex generation belongs in the Rust API.
+8. **Not a general programming language:** only arrays, ranges, wildcards,
+   and global variables; complex generation belongs in the Rust API.
 
 ## 4. Core data model: indices
 
@@ -275,11 +275,11 @@ D at (1.5, -1.5)
 C - D [hop]
 ```
 
-**3D**
+**3D** (section 11)
 ```
-3d, camera 35 25
+3d, camera -30 35
 grid T 2x2
-T[*]: leg +z
+T[*]: leg -z
 T[*] [shape=box]
 ```
 
@@ -319,10 +319,10 @@ layout.  The default is 2.
   tensor:
   - 2D: `up`, `down`, `left`, `right`, `up-left`, and so on, or an angle;
   - 3D: `+x`, `-y`, `+z`, or a vector such as `(0, 0, 1)`.
-- **Without a direction:** a bond heads for the next point of its route; an
-  open leg follows its prime level, prime level 0 pointing down and 1
-  pointing up.  An MPO's `s` and `s'` therefore separate on their own, and so
-  do bra and ket.
+- **Without a direction** (in 3D, see section 11.1): a bond heads for the next
+  point of its route; an open leg follows its prime level, prime level 0
+  pointing down and 1 pointing up.  An MPO's `s` and `s'` therefore separate
+  on their own, and so do bra and ket.
 - **Routes:** `A - B [via=(2, 1), (3, 1)]` lists points a bond passes
   through, in page coordinates.
 
@@ -581,7 +581,7 @@ creates the object.
 
 | Selector | Examples |
 |---|---|
-| type | `*` (every tensor), `-` (every bond), `leg` |
+| type | `*` (every tensor), `-` (every bond), `leg`, `plane` (3D) |
 | tag | `tag:Site`, `tag:Link` |
 | group | `ket`, `op` |
 | name | `A[3]`, `A[*]`, `T[*, 1]` |
@@ -628,17 +628,19 @@ Unknown attributes, and values of the wrong type, are errors.
 |---|---|---|---|---|
 | `2d`, `3d` | layout | — | `2d` | layout, geometry |
 | `spacing` | layout | number | `2` | layout |
-| `light` | appearance | angle (2D) or vector (3D) | `135` | lighting model |
-| `camera` | layout | azimuth and elevation; `[projection=orthographic\|perspective]` | — | layout (3D) |
+| `light` | appearance | 2D: an angle; 3D: a vector in view coordinates, or `world` and a vector | 2D `135`, 3D `(-1, 1, 1)` | lighting model |
+| `view` | layout | 3D: `x=` and `y=`, the world axes in view coordinates | `camera -30 35` | geometry (3D) |
+| `camera` | layout | 3D: azimuth and elevation, a shorthand for `view` | `-30 35` | geometry (3D) |
 
 **Tensors**
 
 | Attribute | Category | Type | Default | Read by |
 |---|---|---|---|---|
-| `shape` | geometry | `rect`, `orb`, `triangle`, `diamond`, `dot`; 3D: `sphere`, `box`, `dot` | `rect` | geometry |
+| `shape` | geometry | 2D: `rect`, `orb`, `triangle`, `diamond`, `dot`; 3D: `sphere`, `box`, `prism`, `octahedron`, `dot` | 2D `rect`, 3D `box` | geometry |
 | `width`, `height` | geometry | length | `rect` 1.1 × .75, `orb` .8, `triangle` 1 × .85, `diamond` 1.05 × .85, `dot` .15; enlarged to fit the label | geometry |
+| `thickness` | geometry | length; 3D only | see section 11.3 | geometry |
 | `corner-radius` | geometry | length | `.12` | geometry |
-| `rotate` | layout | angle | `0` | layout |
+| `rotate` | layout | angle; 3D: an angle or `(rx, ry, rz)` | `0` | layout |
 | `color` | appearance | colour | `black!48` | lighting model |
 | `label` | appearance | text, or `none` | the name | backend |
 | `label-color` | appearance | colour, or `auto` | `auto` | lighting model |
@@ -699,14 +701,149 @@ Where a default refers to `width`, it means the tube diameter, or 0 for a line.
 
 ## 11. 3D
 
-- A `3d` scene accepts only 3D shapes and a 2D scene only 2D shapes; a
-  mismatch is an error.  In 3D, `orb` means `sphere`.
-- Occlusion is resolved by the compiler, which orders fragments by depth; the
-  language does not describe what is in front.  `z` only breaks ties at
-  equal depth.
-- The geometry of section 8 is specified for 2D.  3D shapes, their
-  silhouettes under the camera, and the depth of fragments are not specified
-  yet.
+Status: specified, not implemented.  Everything in this section applies to
+`3d` scenes only; a 2D scene is unaffected by it.
+
+### 11.1 Frame and layout
+
+- The world frame is right-handed.  Layout works as in 2D (section 7), in the
+  xy plane: `chain` along x, `grid` in xy with row 1 towards +y, `tree` and
+  relative placement as in 2D, and `at` with an optional z.
+- Two rules differ, because 3D figures are mostly about layers:
+  - `stack` places its groups along −z (the first on top), not along −y;
+  - an open leg without a direction points −z at prime level 0 and +z at
+    prime level 1, not −y and +y.
+- Directions: `up`, `down`, `left`, `right` (and their combinations) mean
+  ±y and ±x as in 2D; `+z`, `-z`, and vectors such as `(0, 1, 1)` are also
+  accepted.
+- `rotate` is an angle about z, as in 2D, or three angles `(rx, ry, rz)` in
+  degrees, applied about the world x, y, and z axes in that order.
+
+### 11.2 View
+
+The view maps the world to the page by a rotation and an orthographic
+projection.
+
+```
+3d, view x=(1, -0.35, 0.3), y=(0, 0.8, 0.6)
+3d, camera -30 35
+```
+
+- `view x=…, y=…` gives the directions of the world x and y axes in view
+  coordinates: x to the right of the page, y up, z towards the viewer.  The
+  world z axis is x × y.  The two vectors are made orthonormal: x is
+  normalised, and y keeps only its part perpendicular to x.
+- `camera a e` is a shorthand: the viewer is at azimuth a about the world z
+  axis and elevation e above the xy plane.  At a = 0 the page's right is +x,
+  the direction towards the viewer is (0, −cos e, sin e), and the page's up
+  is (0, sin e, cos e); a turns all three about z.  `camera 0 90` looks
+  straight down z and shows the 2D picture.
+- A point's page position is the first two of its view coordinates, and its
+  **depth** the third (larger is nearer).
+- Without `view` or `camera`, a 3D scene uses `camera -30 35`.
+- Only rotations are allowed: an oblique projection would squash spheres and
+  tubes, and their lighting.
+
+### 11.3 Shapes
+
+A 3D scene accepts only these shapes; a 2D shape name there is an error, and
+these names are errors in a 2D scene.
+
+| Shape | Solid, in the local frame (x right, y up, z towards +z) | Default size (w × h × t) |
+|---|---|---|
+| `sphere` | a ball of diameter `width` | .8 |
+| `box` | the box `width` × `height` × `thickness` | 1.1 × .75 × .75 |
+| `prism` | the 2D `triangle` of `width` × `height` in the xy plane, extruded along z by `thickness` | 1 × .85 × .75 |
+| `octahedron` | vertices at (±w/2, 0, 0), (0, ±h/2, 0), (0, 0, ±t/2) | 1.05 × .85 × .85 |
+| `dot` | a small ball of diameter `width`, drawn without its label | .15 |
+
+- **Rounding.**  A polyhedral solid P is rounded with radius r =
+  `corner-radius` as (P shrunk by r) grown by r: its faces stay where P's
+  are, and every edge and vertex is rounded with radius r.  r is reduced,
+  without a warning, to the largest value that leaves the shrunk solid
+  non-empty.  This is the 2D rounding of section 8.2 in one more dimension.
+- **Cross-sections.**  The cut of `box`, `prism`, and `octahedron` by their
+  local plane z = 0 is the 2D `rect`, `triangle`, and `diamond` of the same
+  width, height, and radius.
+- **Labels.**  A shape is enlarged for its label as its 2D cross-section
+  would be (section 8.2), so its size does not depend on the view.
+- **Silhouette.**  The projected outline of a sphere is a circle; that of a
+  rounded solid is the convex hull of its shrunk solid's projected vertices,
+  grown by r.
+
+### 11.4 Bonds and legs
+
+- Centrelines are built as in section 8.3, in 3D: exit points use the 3D
+  boundary distance, and every bend is a circular arc in the plane of its
+  corner.  Open legs are as in section 8.5.
+- A centreline is cut where it enters its end tensors, so that no line runs
+  inside a solid; the visible part is what remains.
+- A **line** is drawn as its projected centreline with its width in `em`,
+  whatever its depth.  A **tube** is the solid of points within `width` / 2
+  of the centreline; under the orthographic view its outline is the
+  projected centreline grown by `width` / 2.
+- Hops (section 8.7) are 2D only: in 3D, depth tells which line is in front,
+  and `crossing=hop` is ignored with a warning.
+- Arrows (section 8.11) are as in 2D; a `cone` is a cone in space.
+
+### 11.5 Labels
+
+Labels are upright and face the viewer.  A tensor's label is at its
+projected centre and drawn with the tensor, in front of its surface.  Bond,
+leg, and end labels follow sections 8.8 and 8.11 on the projected
+centreline, in page space.
+
+### 11.6 Planes
+
+A plane is a translucent sheet, for showing the layers of a network or a
+region of space.  It is not a tensor: it holds no indices.
+
+```
+bra: grid B 3x3
+ket: grid K 3x3
+stack bra, ket
+plane Lb under bra                            // fitted under a group
+plane Lk under ket [color=cyan!40, padding=.5]
+plane W at (0, 0, -2) [width=8, height=6]     // placed explicitly
+```
+
+- `plane <name> under <group>` fits a plane to a group: the plane through
+  the group's tensor centres, covering their silhouettes plus `padding`
+  (default .4) on every side, as a rectangle aligned with the plane's own
+  axes (the world x and y axes projected onto it, as far as possible).
+  The centres must lie in one plane; if they are on one line, the plane
+  contains the line and its normal is closest to +z; for one tensor, the
+  normal is +z.
+- `plane <name> at <point>` places a `width` × `height` rectangle centred at
+  the point, in its local xy plane, turned by `rotate` (section 11.1).
+- Its corners are rounded by `corner-radius` (default .12).
+- Planes are styled like tensors, by name or with the type selector
+  `plane`: `color` (default `black!35`), `opacity` of the sheet (default
+  .18; its edge is drawn at 2.5 times that, at most 1), `z`, and `label`
+  (none by default; drawn at a corner of the sheet).
+- **Order.**  A plane is ordered by depth like everything else, with two
+  rules: the tensors of the group a plane is fitted `under` are drawn after
+  it where they overlap on the page, so that they rest on it; and a line
+  that crosses a plane is split where it crosses, so that the part behind
+  the plane is seen through it.
+
+### 11.7 Drawing order
+
+The key of section 8.9 is used with its depth: pieces are drawn from far to
+near.  Lines are split where needed for a single order to exist: where their
+projections cross other lines or silhouettes and the depth order changes
+along them, and where they cross planes.  Opacity (section 8.9) and
+shadows are as in 2D: a shadow is the soft drop shadow of section 3.1 of
+docs/lighting.md, offset on the page away from the light.
+
+### 11.8 Light
+
+`light` is a scene statement.  In 3D it is a direction in view
+coordinates, so that it keeps its place in the picture whatever the view:
+the default is `light (-1, 1, 1)`, from the upper left and the front.
+`light world (x, y, z)` fixes it in the world instead.  Rotating an object
+never turns the light.  The shading of spheres, rounded solids, tubes,
+cones, and planes is the engine's lighting model (docs/lighting.md).
 
 ## 12. Entry and exit points
 
@@ -780,4 +917,7 @@ them.  `docs/protocol.md` specifies the files and the order of runs.
   describe the current behaviour.
 - **Julia export:** not needed for now; it can be written when there is a
   use for it.
-- **3D geometry** (section 11).
+- **3D implementation** (section 11 is specified; the engine does not
+  implement it yet).
+- **Perspective projection** and oblique projections in 3D.
+- **Planes in 2D** (a panel behind a group).

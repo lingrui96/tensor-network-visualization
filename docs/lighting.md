@@ -180,7 +180,16 @@ The luminance is .2126 R + .7152 G + .0722 B of the base colour.  The engine
 sends the rule itself (background slot, weights, threshold, the two colours),
 and the backend applies it once the RGB is known (`\tnvAutoColor`).
 
-## 6. Origin
+## 6. 3D
+
+Specified with its implementation (language section 11).  The plan: the
+palette of sections 3.2 and 3.3 throughout; spheres as in section 3.3 with
+the world or view light; rounded solids drawn as their visible flat faces,
+cylindrical edges, and spherical vertices, each lit from its own normal, so
+that lit edges catch the light as the 2D rims do; tubes and cones as in
+section 4 with 3D normals; planes as a flat translucent fill and edge.
+
+## 7. Origin
 
 The formulas come from the frozen TeX prototype (`tex/prototype/tnviz.sty`).  They are
 now computed by the engine, so the prototype's TeX-side PostScript builder
