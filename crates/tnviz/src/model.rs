@@ -154,6 +154,10 @@ pub enum Selector {
     Name(NamePattern),
     /// `plane`: every plane.
     Planes,
+    /// `g.-`: the bonds with both ends in group `g`.
+    GroupBonds(String),
+    /// `g.leg`: the legs of the tensors of group `g`.
+    GroupLegs(String),
     /// A leg of the tensors matching the pattern, such as `A[*].p`.
     LegOf(NamePattern, LegKey),
     Tensor(TensorId),
@@ -462,6 +466,10 @@ impl Network {
         let index = self.index(i);
         self.cascade(|sel| match sel {
             Selector::Bonds => Some(0),
+            Selector::GroupBonds(g) => self
+                .group(g)
+                .is_some_and(|g| index.holders().iter().all(|(t, _)| g.members.contains(t)))
+                .then_some(1),
             _ => self.index_rule(sel, i, index),
         })
     }
@@ -475,6 +483,7 @@ impl Network {
         self.cascade(|sel| match sel {
             Selector::Legs => Some(0),
             Selector::OpenLegs => index.is_open().then_some(1),
+            Selector::GroupLegs(g) => self.group(g).is_some_and(|g| g.members.contains(&t)).then_some(1),
             Selector::Slot(id, k) => (*id == t && *k == slot).then_some(2),
             Selector::LegOf(p, key) => {
                 let hit = p.matches(&tensor.name, 0)

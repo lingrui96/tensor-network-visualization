@@ -232,10 +232,11 @@ the 2D glass faces as a consequence of their geometry.
 
 ### 6.4 Tubes and cones
 
-A tube is shaded as in section 4, but across each piece of its centreline
-the normal turns from the page towards the viewer about that piece's axis
-a: at page offset q r, n = q + √(1 − |q|²) w, with w as for edges.  L is
-the scene light, not a raised page light.  A cone arrow is shaded on the
+A tube's normal is found as in section 4, but across each piece of its
+centreline it turns from the page towards the viewer about that piece's
+axis a: at page offset q r, n = q + √(1 − |q|²) w, with w as for edges.  It
+is coloured like every 3D surface (6.1), with the scene light, so that
+tubes are as light as the tensors; 2D tubes keep the terms of section 4.  A cone arrow is shaded on the
 page as in section 5.
 
 ### 6.5 Planes

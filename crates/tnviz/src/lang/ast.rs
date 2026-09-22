@@ -11,6 +11,36 @@ pub enum Expr {
     Var(String, i64),
 }
 
+/// A coordinate: arithmetic on numbers and `for` variables.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Coord {
+    Num(f64),
+    Var(String),
+    Neg(Box<Coord>),
+    Op(char, Box<Coord>, Box<Coord>),
+}
+
+impl Coord {
+    pub fn eval(&self, env: &std::collections::HashMap<String, i64>) -> std::result::Result<f64, String> {
+        Ok(match self {
+            Coord::Num(x) => *x,
+            Coord::Var(v) => {
+                *env.get(v).ok_or_else(|| format!("unknown variable `{v}` in a coordinate"))? as f64
+            }
+            Coord::Neg(a) => -a.eval(env)?,
+            Coord::Op(op, a, b) => {
+                let (a, b) = (a.eval(env)?, b.eval(env)?);
+                match op {
+                    '+' => a + b,
+                    '-' => a - b,
+                    '*' => a * b,
+                    _ => a / b,
+                }
+            }
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Sub {
     Expr(Expr),
@@ -65,6 +95,8 @@ pub enum SelectorAst {
     Legs,
     OpenLegs,
     Planes,
+    /// `g.-`: the bonds within a group.
+    GroupBonds(String),
     Tag(String),
     Name(NameAst),
     LegOf(NameAst, LegRef),
@@ -117,6 +149,7 @@ pub enum StmtKind {
         group: Option<String>,
         list: Vec<EndRef>,
         attrs: Vec<Attr>,
+        each: Option<ForClause>,
     },
     Grid {
         base: String,
@@ -134,13 +167,21 @@ pub enum StmtKind {
     },
     At {
         target: NameAst,
-        pos: Vec<f64>,
+        pos: Vec<Coord>,
+        each: Option<ForClause>,
     },
     Relative {
         target: NameAst,
         relation: Relation,
         anchor: NameAst,
         distance: Option<f64>,
+        each: Option<ForClause>,
+    },
+    /// The statements of a function call, and the group its new tensors
+    /// form, if named.
+    Block {
+        group: Option<String>,
+        stmts: Vec<Stmt>,
     },
     Stack(Vec<String>),
     Tree {

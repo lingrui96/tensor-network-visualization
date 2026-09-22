@@ -90,18 +90,24 @@ fn nearer_things_are_drawn_later() {
 #[test]
 fn planes_divide_the_order_into_layers() {
     let src = "3d\ngrid A 2x2\ngrid B 2x2\nket: A[1..2, 1..2]\nbra: B[1..2, 1..2]\nstack bra, ket\n\
-               B[1, 1] at (0, 0, 0)\nA[1..2, 1..2] - B[1..2, 1..2]\nplane P under bra\n";
+               B[1, 1] at (0, 0, 0)\nA[1..2, 1..2] - B[1..2, 1..2]\n- [tube]\nplane P under bra\n";
     let (net, g) = build(src);
     assert_eq!(g.planes.len(), 1);
     let parts: Vec<Part> = order(&net, &g).into_iter().map(|f| f.part).collect();
     let at = |p: Part| parts.iter().position(|q| *q == p).unwrap();
     let plane = at(Part::Plane(0));
-    // The upper layer rests on its plane; the lower one is behind it.
+    // The plane passes through the upper layer's centres: each upper tensor
+    // is drawn whole behind it, then its part in front after it.  The lower
+    // layer is behind the plane.
     let (a, b) = (
         net.find_tensor(&tnviz::Name::new("A", vec![1, 1])).unwrap(),
         net.find_tensor(&tnviz::Name::new("B", vec![1, 1])).unwrap(),
     );
-    assert!(at(Part::Tensor(a)) < plane && plane < at(Part::Tensor(b)));
+    assert!(at(Part::Tensor(a)) < plane);
+    assert!(at(Part::Tensor(b)) < plane && plane < at(Part::TensorFront(b)));
+    assert!(g.tensors[b.0].front.is_some() && g.tensors[a.0].front.is_none());
+    // A bond lying in the plane is split along its length.
+    assert!(g.lines.iter().any(|l| l.fronts.iter().any(|f| f.is_some())));
     // A bond between the layers ends under the upper tensors, below the
     // plane through their centres; a plane halfway between the layers cuts
     // it in two.

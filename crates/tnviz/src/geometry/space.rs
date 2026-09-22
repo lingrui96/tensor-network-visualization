@@ -218,7 +218,25 @@ impl Builder<'_> {
         let (sheets, planes) = self.sheets(&view, &tensors, &solids)?;
         let mut tensors = tensors;
         for (k, t) in tensors.iter_mut().enumerate() {
-            t.layer = layer(&sheets, solids[k].center, Some(TensorId(k)), None);
+            let solid = &solids[k];
+            // The first plane through the tensor that cuts what it shows.
+            let cut = sheets.iter().enumerate().find_map(|(p, sh)| {
+                if dot(solid.center - sh.center, sh.normal).abs() >= solid.reach() {
+                    return None;
+                }
+                match solid_front(solid, &view, sh, &t.outline) {
+                    Split::Part(region, sides) => Some((p, region, sides)),
+                    Split::Whole => None,
+                }
+            });
+            match cut {
+                Some((p, region, sides)) => {
+                    let base = layer(&sheets, solid.center, Some(p));
+                    t.layer = base;
+                    t.front = Some(Front { region, layer: base + 2, sides });
+                }
+                None => t.layer = layer(&sheets, solid.center, None),
+            }
         }
         for (k, line) in lines.iter().enumerate() {
             if let Some(label) = self.line_label(k, line) {
@@ -245,10 +263,11 @@ impl Builder<'_> {
                 line.outline = Some(tube_region(&line.centerline.slice(s0, s1), line.width / 2.0, caps, j));
             }
         }
-        let spans: Vec<Vec<Span>> =
+        let spans: Vec<(Vec<Span>, Vec<Option<Front>>)> =
             (0..lines.len()).map(|k| spans(k, &lines, &worlds[k], &tensors, &sheets, &view)).collect();
-        for (line, s) in lines.iter_mut().zip(spans) {
+        for (line, (s, f)) in lines.iter_mut().zip(spans) {
             line.spans = s;
+            line.fronts = f;
         }
         Ok(Geometry {
             tensors,
@@ -321,6 +340,7 @@ impl Builder<'_> {
                 depth: view.depth(placed.pos),
                 patches: solid.patches(view),
                 layer: 0,
+                front: None,
             });
             solids.push(solid);
             if let Some(((size, measured), text)) = label {
@@ -503,31 +523,157 @@ impl Builder<'_> {
             axes: proj.axes,
             spans: Vec::new(),
             junctions,
+            fronts: Vec::new(),
         }
     }
 }
 
-/// A plane in the world: its centre, its normal towards the viewer, and
-/// the tensors resting on it.
+/// A plane in the world: its centre and its normal towards the viewer.
 struct Sheet {
     center: V3,
     normal: V3,
-    members: Vec<TensorId>,
 }
 
 /// The layer of a point among the planes (section 11.7): twice the number
 /// of planes it is in front of, counting those it lies in or rests on.
 /// `own` leaves out a plane itself, for its own centre.
-fn layer(sheets: &[Sheet], p: V3, tensor: Option<TensorId>, own: Option<usize>) -> u32 {
+fn layer(sheets: &[Sheet], p: V3, own: Option<usize>) -> u32 {
     let front = sheets
         .iter()
         .enumerate()
         .filter(|(k, _)| Some(*k) != own)
-        .filter(|(_, sh)| {
-            tensor.is_some_and(|t| sh.members.contains(&t)) || dot(p - sh.center, sh.normal) > -1e-6
-        })
+        .filter(|(_, sh)| dot(p - sh.center, sh.normal) > -1e-6)
         .count();
     2 * front as u32
+}
+
+/// How a plane divides what an object shows on the page.
+enum Split {
+    /// Nothing, or all, of it is in front: no cut.
+    Whole,
+    /// The part in front of the plane.
+    Part(Path, [bool; 2]),
+}
+
+fn inside_polygon(poly: &[V3], p: V3) -> bool {
+    let mut c = false;
+    for k in 0..poly.len() {
+        let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// The part of a solid's visible surface in front of a plane (section
+/// 11.7): where it is nearer than the plane at the same page point.  For a
+/// convex solid it is convex; its boundary is found on a grid and refined
+/// where the grid crosses it.
+fn solid_front(solid: &Solid, view: &View, sheet: &Sheet, outline: &Path) -> Split {
+    let nv = view.apply(sheet.normal);
+    if nv.z < 0.05 {
+        return Split::Whole;
+    }
+    let c0 = view.apply(sheet.center);
+    let plane = |p: V3| c0.z - (nv.x * (p.x - c0.x) + nv.y * (p.y - c0.y)) / nv.z;
+    let front = |p: V3| solid.surface_depth(view, p).is_some_and(|z| z > plane(p));
+    let poly = outline.sample(0.01);
+    let (lo, hi) =
+        poly.iter().fold((V3::xy(f64::MAX, f64::MAX), V3::xy(f64::MIN, f64::MIN)), |(lo, hi), p| {
+            (V3::xy(lo.x.min(p.x), lo.y.min(p.y)), V3::xy(hi.x.max(p.x), hi.y.max(p.y)))
+        });
+    let n = 36;
+    let at = |i: usize, j: usize| {
+        V3::xy(lo.x + (hi.x - lo.x) * i as f64 / n as f64, lo.y + (hi.y - lo.y) * j as f64 / n as f64)
+    };
+    let mut pts: Vec<V3> = poly.iter().copied().filter(|p| front(*p)).collect();
+    let (mut shown, mut total) = (0, 0);
+    let cut = |a: V3, b: V3, pts: &mut Vec<V3>| {
+        // a is in front, b behind: the boundary between them.
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..30 {
+            let mid = (lo + hi) / 2.0;
+            if front(a + (b - a) * mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        pts.push(a + (b - a) * lo);
+    };
+    for j in 0..=n {
+        for i in 0..=n {
+            let p = at(i, j);
+            if !inside_polygon(&poly, p) {
+                continue;
+            }
+            total += 1;
+            let here = front(p);
+            if here {
+                shown += 1;
+                pts.push(p);
+            }
+            for q in [at(i + 1, j), at(i, j + 1)] {
+                if i < n && j < n && inside_polygon(&poly, q) && front(q) != here {
+                    if here { cut(p, q, &mut pts) } else { cut(q, p, &mut pts) }
+                }
+            }
+        }
+    }
+    if shown == 0 || shown == total {
+        return Split::Whole;
+    }
+    let h = solid::hull(&pts);
+    if h.len() < 3 {
+        return Split::Whole;
+    }
+    let m = h.len();
+    Split::Part(
+        Path { pieces: (0..m).map(|k| Piece::Line { a: h[k], b: h[(k + 1) % m] }).collect(), closed: true },
+        [false, false],
+    )
+}
+
+/// The half of a tube span lying in a plane that is in front of it: across
+/// the tube, the wall faces the viewer for angles θ in [0, π] from its
+/// left, and is above the plane for half of all angles.
+fn tube_front(line: &LineGeom, from: f64, to: f64, a: V3, b: V3, view: &View, sheet: &Sheet) -> Split {
+    let r = line.width / 2.0;
+    let (_, d) = line.centerline.at((from + to) / 2.0);
+    let e = V3::xy(-d.y, d.x);
+    let Some(axis) = view.apply(b - a).unit() else { return Split::Whole };
+    let w = super::edge_toward(axis, e);
+    let np = view.apply(sheet.normal);
+    let phi = dot(w, np).atan2(dot(e, np));
+    let pi = std::f64::consts::PI;
+    // The angles above the plane, (φ - π/2, φ + π/2), within [0, π].
+    let (lo, hi) = [phi, phi + 2.0 * pi]
+        .into_iter()
+        .map(|c| ((c - pi / 2.0).max(0.0), (c + pi / 2.0).min(pi)))
+        .find(|(lo, hi)| hi > lo)
+        .unwrap_or((0.0, 0.0));
+    if hi - lo < 1e-6 || (lo < 1e-9 && hi > pi - 1e-9) {
+        return Split::Whole;
+    }
+    let (q_hi, q_lo) = (lo.cos(), hi.cos());
+    let steps = ((to - from) / 0.05).ceil().max(2.0) as usize;
+    let along: Vec<(V3, V3)> = (0..=steps)
+        .map(|i| {
+            let (p, t) = line.centerline.at(from + (to - from) * i as f64 / steps as f64);
+            (p, V3::xy(-t.y, t.x))
+        })
+        .collect();
+    let mut pts: Vec<V3> = along.iter().map(|(p, e)| *p + *e * (q_hi * r)).collect();
+    pts.extend(along.iter().rev().map(|(p, e)| *p + *e * (q_lo * r)));
+    let m = pts.len();
+    Split::Part(
+        Path {
+            pieces: (0..m).map(|k| Piece::Line { a: pts[k], b: pts[(k + 1) % m] }).collect(),
+            closed: true,
+        },
+        [lo < 1e-9, hi > pi - 1e-9],
+    )
 }
 
 impl Builder<'_> {
@@ -543,7 +689,7 @@ impl Builder<'_> {
         for (k, plane) in self.net.planes().iter().enumerate() {
             let attrs = self.net.plane_style(k);
             let corner = self.length(&attrs, "corner-radius", false).unwrap_or(0.12);
-            let (center, u, v, n, w, h, members) = match &plane.place {
+            let (center, u, v, n, w, h) = match &plane.place {
                 PlanePlace::Under(g) => {
                     let group = self
                         .net
@@ -570,7 +716,7 @@ impl Builder<'_> {
                         hi = (hi.0.max(a + reach), hi.1.max(b + reach));
                     }
                     let mid = pts[0] + u * ((lo.0 + hi.0) / 2.0) + v * ((lo.1 + hi.1) / 2.0);
-                    (mid, u, v, n, hi.0 - lo.0, hi.1 - lo.1, members)
+                    (mid, u, v, n, hi.0 - lo.0, hi.1 - lo.1)
                 }
                 PlanePlace::At(at) => {
                     let c = V3::new(at[0], at[1], at.get(2).copied().unwrap_or(0.0));
@@ -580,7 +726,7 @@ impl Builder<'_> {
                     let w = self.length(&attrs, "width", false).unwrap_or(4.0);
                     let h = self.length(&attrs, "height", false).unwrap_or(3.0);
                     let axis = |x, y, z| rot.apply(V3::new(x, y, z));
-                    (c, axis(1.0, 0.0, 0.0), axis(0.0, 1.0, 0.0), axis(0.0, 0.0, 1.0), w, h, Vec::new())
+                    (c, axis(1.0, 0.0, 0.0), axis(0.0, 1.0, 0.0), axis(0.0, 0.0, 1.0), w, h)
                 }
             };
             // Towards the viewer, to tell its sides apart.
@@ -600,7 +746,7 @@ impl Builder<'_> {
                 closed: true,
             };
             outlines.push((outline, view.depth(center)));
-            sheets.push(Sheet { center, normal: n, members });
+            sheets.push(Sheet { center, normal: n });
         }
         let planes = outlines
             .into_iter()
@@ -608,7 +754,7 @@ impl Builder<'_> {
             .map(|(k, (outline, depth))| PlaneGeom {
                 outline,
                 depth,
-                layer: layer(&sheets, sheets[k].center, None, Some(k)) + 1,
+                layer: layer(&sheets, sheets[k].center, Some(k)) + 1,
             })
             .collect();
         Ok((sheets, planes))
@@ -642,6 +788,7 @@ fn fit_normal(pts: &[V3]) -> Option<V3> {
 /// The spans of line `k` (section 11.7): cut where its page centreline
 /// crosses another line or a silhouette, and where it crosses a plane; each
 /// at the depth, and in the layer, of its middle.
+#[allow(clippy::type_complexity)]
 fn spans(
     k: usize,
     lines: &[LineGeom],
@@ -649,7 +796,7 @@ fn spans(
     tensors: &[TensorGeom],
     sheets: &[Sheet],
     view: &View,
-) -> Vec<Span> {
+) -> (Vec<Span>, Vec<Option<Front>>) {
     let line = &lines[k];
     let mut cuts = vec![0.0, line.centerline.length()];
     let mut offset = 0.0;
@@ -693,10 +840,34 @@ fn spans(
     };
     cuts.sort_by(f64::total_cmp);
     cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    let r = line.width / 2.0;
     cuts.windows(2)
         .map(|w| {
             let mid = world_at((w[0] + w[1]) / 2.0);
-            Span { from: w[0], to: w[1], depth: view.depth(mid), layer: layer(sheets, mid, None, None) }
+            let mut span =
+                Span { from: w[0], to: w[1], depth: view.depth(mid), layer: layer(sheets, mid, None) };
+            // A tube lying in a plane is cut along its length.
+            let (a, b) = (world_at(w[0] + 1e-9), world_at(w[1] - 1e-9));
+            let near = |sh: &Sheet, p: V3| dot(p - sh.center, sh.normal).abs() < 0.3 * r;
+            let front = (line.style == LineStyle::Tube)
+                .then(|| {
+                    sheets.iter().enumerate().find_map(|(p, sh)| {
+                        if !(near(sh, a) && near(sh, b)) {
+                            return None;
+                        }
+                        match tube_front(line, w[0], w[1], a, b, view, sh) {
+                            Split::Part(region, sides) => Some((p, region, sides)),
+                            Split::Whole => None,
+                        }
+                    })
+                })
+                .flatten()
+                .map(|(p, region, sides)| {
+                    let base = layer(sheets, mid, Some(p));
+                    span.layer = base;
+                    Front { region, layer: base + 2, sides }
+                });
+            (span, front)
         })
-        .collect()
+        .unzip()
 }

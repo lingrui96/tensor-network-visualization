@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use crate::geometry::{
     Anchor, ArrowGeom, Cap, Geometry, GeometryOptions, LabelOwner, LabelText, LineKind, Path, Piece,
-    tube_region, tube_sides,
+    clip_convex, clip_polyline_convex, tube_region, tube_sides,
 };
 use crate::layout::V3;
 use crate::lighting::{ArrowLook, Colour, LabelColour, Lighting, LineLook, Other, Shading, Stroke};
@@ -94,8 +94,8 @@ impl Writer<'_> {
         let line = |k: usize| (Object::Line(k), self.lighting.line_opacity[k]);
         match part {
             Part::TensorShadow(t) => (Object::Shadow(t), 1.0),
-            Part::Tensor(t) => tensor(t),
-            Part::Line(k) | Part::Arrow(k) | Part::Span(k, _) => line(k),
+            Part::Tensor(t) | Part::TensorFront(t) => tensor(t),
+            Part::Line(k) | Part::Arrow(k) | Part::Span(k, _) | Part::SpanFront(k, _) => line(k),
             // A plane's fill and edge have their own opacities.
             Part::Plane(k) => (Object::Plane(k), 1.0),
             Part::Label(k) => match self.geom.labels[k].owner {
@@ -164,6 +164,44 @@ impl Writer<'_> {
                 _ => {}
             },
             Part::Span(k, i) => self.span(s, k, i),
+            Part::TensorFront(t) => {
+                // The part in front of a plane: the same surface, clipped.
+                let k = self.tensor_index(t);
+                let (geom, look) = (&self.geom.tensors[k], &self.lighting.tensors[k]);
+                let front = geom.front.as_ref().expect("a cut tensor");
+                let clip = front.region.sample(0.02);
+                shade(s, &path_code(&front.region), &look.face);
+                for (region, shading) in &look.patches {
+                    let part = clip_convex(&region.sample(0.02), &clip);
+                    if part.len() >= 3 {
+                        shade(s, &path_code(&polygon_path(&part)), shading);
+                    }
+                }
+                // Only the outline, not the cut, is stroked.
+                let mut outline = geom.outline.sample(0.02);
+                if let Some(first) = outline.first().copied() {
+                    outline.push(first);
+                }
+                for run in clip_polyline_convex(&outline, &clip) {
+                    self.stroke(s, &path_code(&open_path(&run)), &look.outline, "round");
+                }
+            }
+            Part::SpanFront(k, i) => {
+                let line = &self.geom.lines[k];
+                let (Some(Some(front)), LineLook::Tube { shading, outline }) =
+                    (line.fronts.get(i), &self.lighting.lines[k])
+                else {
+                    return;
+                };
+                shade(s, &path_code(&front.region), shading);
+                let span = line.spans[i];
+                let sides = tube_sides(&line.centerline.slice(span.from, span.to), line.width / 2.0);
+                for (side, shown) in sides.iter().zip(front.sides) {
+                    if shown {
+                        self.stroke(s, &path_code(side), outline, "round");
+                    }
+                }
+            }
             Part::Plane(k) => {
                 let (geom, look) = (&self.geom.planes[k], &self.lighting.planes[k]);
                 let path = path_code(&geom.outline);
@@ -331,6 +369,15 @@ fn colour(c: &Colour) -> String {
         Other::Black => "black",
     };
     format!("\\tnvSlot{{{}}}!{}!{other}", c.slot, num(percent))
+}
+
+fn polygon_path(pts: &[V3]) -> Path {
+    let n = pts.len();
+    Path { pieces: (0..n).map(|k| Piece::Line { a: pts[k], b: pts[(k + 1) % n] }).collect(), closed: true }
+}
+
+fn open_path(pts: &[V3]) -> Path {
+    Path { pieces: pts.windows(2).map(|w| Piece::Line { a: w[0], b: w[1] }).collect(), closed: false }
 }
 
 /// A path in TikZ syntax, in layout units.

@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 pub use path::{Cap, Path, Piece, tube_region, tube_sides};
 pub use shape::Shape;
 pub use solid::{Patch, View, edge_toward};
+pub(crate) use solid::{clip_convex, clip_polyline_convex};
 
 use crate::error::{Error, Result};
 use crate::layout::{Placement, Route, V3};
@@ -77,6 +78,19 @@ pub struct TensorGeom {
     pub patches: Vec<Patch>,
     /// In 3D, its layer among the planes (section 11.7); 0 in 2D.
     pub layer: u32,
+    /// In 3D, when a plane cuts it: the part of it in front of the plane,
+    /// drawn again there over the whole, which is behind.
+    pub front: Option<Front>,
+}
+
+/// The part of an object in front of a plane that cuts it: a convex region
+/// of the page, and its layer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Front {
+    pub region: Path,
+    pub layer: u32,
+    /// For a tube: whether its left and right sides are in the region.
+    pub sides: [bool; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +131,8 @@ pub struct LineGeom {
     /// start and end (see `tube_region`).  None in 2D, where tensors cover
     /// the ends of their lines.
     pub junctions: [Option<Vec<V3>>; 2],
+    /// In 3D, for each span of a tube lying in a plane: its half in front.
+    pub fronts: Vec<Option<Front>>,
 }
 
 /// A part of a line, by arc length, drawn at one depth.
@@ -491,6 +507,7 @@ impl Builder<'_> {
                 depth: 0.0,
                 patches: Vec::new(),
                 layer: 0,
+                front: None,
             });
             if let Some(((size, measured), text)) = label {
                 labels.push(LabelGeom {
@@ -581,6 +598,7 @@ impl Builder<'_> {
                 axes: Vec::new(),
                 spans: Vec::new(),
                 junctions: [None, None],
+                fronts: Vec::new(),
             },
             vertices,
             filleted,
@@ -671,6 +689,7 @@ impl Builder<'_> {
             axes: Vec::new(),
             spans: Vec::new(),
             junctions: [None, None],
+            fronts: Vec::new(),
         }
     }
 

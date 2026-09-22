@@ -164,6 +164,8 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
             Selector::Legs => o.push_str("leg"),
             Selector::OpenLegs => o.push_str("leg.open"),
             Selector::Planes => o.push_str("plane"),
+            Selector::GroupBonds(g) => write!(o, "{g}.-")?,
+            Selector::GroupLegs(g) => write!(o, "{g}.leg")?,
             Selector::Tag(t) => write!(o, "tag:{t}")?,
             Selector::Name(p) => write!(o, "{p}")?,
             Selector::LegOf(p, key) => {

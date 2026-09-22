@@ -767,21 +767,10 @@ fn tube_shading3(
     let s =
         p.bind(sqrt(max(c(0.0), sub(c(1.0), add(mul(qx.clone(), qx.clone()), mul(qy.clone(), qy.clone()))))));
     let n = [p.bind(add(qx, mul(s.clone(), wx))), p.bind(add(qy, mul(s.clone(), wy))), p.bind(mul(s, wz))];
-    let h = V3::new(l.x, l.y, l.z + 1.0).unit().unwrap();
-    let dot =
-        |v: V3| add(add(mul(n[0].clone(), c(v.x)), mul(n[1].clone(), c(v.y))), mul(n[2].clone(), c(v.z)));
-    let diffuse = p.bind(max(c(0.0), dot(l)));
-    let spec = p.bind(pow(max(c(0.0), dot(h)), c(TUBE_SHININESS)));
-    let channel = |ch: u8| {
-        min(
-            c(1.0),
-            add(
-                mul(param(slot, ch), add(c(TUBE_AMBIENT), mul(c(TUBE_DIFFUSE), diffuse.clone()))),
-                mul(c(TUBE_SPECULAR), spec.clone()),
-            ),
-        )
-    };
-    p.output([channel(0), channel(1), channel(2)]);
+    // The palette of every 3D surface (section 6.1 of docs/lighting.md), so
+    // that tubes stay as light as the tensors.
+    let terms = surface_terms(&mut p, n, l);
+    p.output(surface_colour(slot, &terms, None));
     let (center, extent) = domain(&outline);
     Shading { center, extent, program: p }
 }

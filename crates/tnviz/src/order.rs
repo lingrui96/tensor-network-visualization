@@ -21,6 +21,10 @@ pub enum Part {
     Span(usize, usize),
     /// In 3D, a plane.
     Plane(usize),
+    /// In 3D, the part of a tensor in front of a plane that cuts it.
+    TensorFront(TensorId),
+    /// In 3D, the half of a tube span in front of the plane it lies in.
+    SpanFront(usize, usize),
     /// A label, by its position in `Geometry::labels`.
     Label(usize),
 }
@@ -92,6 +96,10 @@ pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
             });
         }
         out.push(Fragment { key: key(Pass::Scene, Class::Tensors, z, order), part: Part::Tensor(t.tensor) });
+        if let Some(front) = &t.front {
+            let key = Key { layer: front.layer, ..key(Pass::Scene, Class::Tensors, z, order) };
+            out.push(Fragment { key, part: Part::TensorFront(t.tensor) });
+        }
     }
     let line_key = |k: usize| {
         let l = &geom.lines[k];
@@ -127,6 +135,12 @@ pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
             for (i, span) in line.spans.iter().enumerate() {
                 let key = Key { layer: span.layer, ..at_depth(line_key(k), span.depth) };
                 out.push(Fragment { key, part: Part::Span(k, i) });
+                if let Some(Some(front)) = line.fronts.get(i) {
+                    out.push(Fragment {
+                        key: Key { layer: front.layer, ..key },
+                        part: Part::SpanFront(k, i),
+                    });
+                }
             }
         }
         if let Some(arrow) = &line.arrow {
@@ -136,9 +150,15 @@ pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
     }
     for (k, label) in geom.labels.iter().enumerate() {
         let key = match label.owner {
-            // A tensor's label is printed on it, right after it.
+            // A tensor's label is printed on it, right after it, or after
+            // its part in front of a plane that cuts it.
             LabelOwner::Tensor(t) => {
-                let body = out.iter().find(|f| f.part == Part::Tensor(t)).unwrap().key;
+                let body = out
+                    .iter()
+                    .find(|f| f.part == Part::TensorFront(t))
+                    .or_else(|| out.iter().find(|f| f.part == Part::Tensor(t)))
+                    .unwrap()
+                    .key;
                 Key { order: body.order + 0.5, ..body }
             }
             // Printed on a line: ordered with the line, or its span.

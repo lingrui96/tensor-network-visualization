@@ -347,6 +347,46 @@ impl Solid {
         out
     }
 
+    /// The radius of a ball about the centre that holds the solid.
+    pub fn reach(&self) -> f64 {
+        match &self.form {
+            Form::Ball { radius } => *radius,
+            Form::Rounded { verts, radius, .. } => {
+                verts.iter().map(|v| v.norm()).fold(0.0, f64::max) + radius
+            }
+        }
+    }
+
+    /// The depth of the visible surface at a page point, if the solid
+    /// covers it.
+    pub fn surface_depth(&self, view: &View, p: V3) -> Option<f64> {
+        let (c, reach) = (view.apply(self.center), self.reach());
+        if let Form::Ball { radius } = self.form {
+            let d2 = (p.x - c.x).powi(2) + (p.y - c.y).powi(2);
+            return (d2 <= radius * radius).then(|| c.z + (radius * radius - d2).sqrt());
+        }
+        let at = |z: f64| view.inverse(V3::new(p.x, p.y, z));
+        let (top, steps) = (c.z + reach + 1e-6, 32);
+        let mut outside = top;
+        for i in 1..=steps {
+            let z = top - 2.0 * reach * i as f64 / steps as f64;
+            if self.outside(at(z)) <= 0.0 {
+                let (mut lo, mut hi) = (z, outside);
+                for _ in 0..40 {
+                    let mid = (lo + hi) / 2.0;
+                    if self.outside(at(mid)) <= 0.0 {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                return Some((lo + hi) / 2.0);
+            }
+            outside = z;
+        }
+        None
+    }
+
     fn ball_radius(&self) -> f64 {
         match &self.form {
             Form::Ball { radius } => *radius,
@@ -423,13 +463,87 @@ impl Patch {
     }
 }
 
+/// The part of a polygon inside a convex counter-clockwise polygon.
+pub(crate) fn clip_convex(subject: &[V3], clip: &[V3]) -> Vec<V3> {
+    let inside = |p: V3, a: V3, b: V3| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) >= -1e-12;
+    let cut = |p: V3, q: V3, a: V3, b: V3| {
+        let (d, e) = (q - p, b - a);
+        let den = d.x * e.y - d.y * e.x;
+        if den.abs() < 1e-15 {
+            return p;
+        }
+        let t = ((a.x - p.x) * e.y - (a.y - p.y) * e.x) / den;
+        p + d * t
+    };
+    let mut out = subject.to_vec();
+    for k in 0..clip.len() {
+        let (a, b) = (clip[k], clip[(k + 1) % clip.len()]);
+        let input = std::mem::take(&mut out);
+        for i in 0..input.len() {
+            let (p, q) = (input[i], input[(i + 1) % input.len()]);
+            match (inside(p, a, b), inside(q, a, b)) {
+                (true, true) => out.push(q),
+                (true, false) => out.push(cut(p, q, a, b)),
+                (false, true) => {
+                    out.push(cut(p, q, a, b));
+                    out.push(q);
+                }
+                (false, false) => {}
+            }
+        }
+        if out.is_empty() {
+            break;
+        }
+    }
+    out
+}
+
+/// The runs of an open polyline inside a convex counter-clockwise polygon.
+pub(crate) fn clip_polyline_convex(line: &[V3], clip: &[V3]) -> Vec<Vec<V3>> {
+    let mut runs: Vec<Vec<V3>> = Vec::new();
+    let mut open = false;
+    for w in line.windows(2) {
+        // Cyrus–Beck: the part of the segment within every edge.
+        let (p, d) = (w[0], w[1] - w[0]);
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        for k in 0..clip.len() {
+            let (a, b) = (clip[k], clip[(k + 1) % clip.len()]);
+            let n = V3::xy(-(b.y - a.y), b.x - a.x);
+            let (num, den) = ((p.x - a.x) * n.x + (p.y - a.y) * n.y, d.x * n.x + d.y * n.y);
+            if den.abs() < 1e-15 {
+                if num < 0.0 {
+                    t1 = -1.0;
+                }
+                continue;
+            }
+            let t = -num / den;
+            if den > 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+        }
+        if t1 > t0 + 1e-12 {
+            let (a, b) = (p + d * t0, p + d * t1);
+            match runs.last_mut() {
+                Some(run) if open && t0 < 1e-9 => run.push(b),
+                _ => runs.push(vec![a, b]),
+            }
+            open = t1 > 1.0 - 1e-9;
+        } else {
+            open = false;
+        }
+    }
+    runs
+}
+
 fn polygon(pts: &[V3]) -> Path {
     let n = pts.len();
     Path { pieces: (0..n).map(|k| Piece::Line { a: pts[k], b: pts[(k + 1) % n] }).collect(), closed: true }
 }
 
 /// The convex hull of page points, counter-clockwise, without repeats.
-fn hull(pts: &[V3]) -> Vec<V3> {
+pub(crate) fn hull(pts: &[V3]) -> Vec<V3> {
     let mut p: Vec<V3> = pts.to_vec();
     p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
     p.dedup_by(|a, b| (*a - *b).norm() < 1e-9);

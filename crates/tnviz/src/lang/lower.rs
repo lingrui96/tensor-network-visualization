@@ -333,9 +333,8 @@ fn statement(net: &mut Network, auto: &mut Auto, stmt: &Stmt) -> Result<()> {
             }
             Ok(())
         })?,
-        StmtKind::Chain { group, list, attrs } => {
-            let tensors: Vec<TensorId> =
-                resolve_list(net, list, &Env::new())?.into_iter().map(|(t, _)| t).collect();
+        StmtKind::Chain { group, list, attrs, each: clause } => each(clause, |env| {
+            let tensors: Vec<TensorId> = resolve_list(net, list, env)?.into_iter().map(|(t, _)| t).collect();
             for w in tensors.windows(2) {
                 let index = connect(net, auto, w[0], None, w[1], None)?;
                 rule(net, Selector::Index(index), attrs)?;
@@ -343,7 +342,17 @@ fn statement(net: &mut Network, auto: &mut Auto, stmt: &Stmt) -> Result<()> {
             if let Some(g) = group {
                 net.add_group(g, tensors.clone())?;
             }
-            net.add_layout(LayoutStmt::Row { tensors })?;
+            net.add_layout(LayoutStmt::Row { tensors })
+        })?,
+        StmtKind::Block { group, stmts } => {
+            let before = net.tensors().len();
+            for s in stmts {
+                statement(net, auto, s).map_err(|e| e.or_at(s.pos))?;
+            }
+            if let Some(g) = group {
+                let members = (before..net.tensors().len()).map(TensorId).collect();
+                net.add_group(g, members)?;
+            }
         }
         StmtKind::Grid { base, rows, cols, attrs } => {
             let id = |net: &mut Network, r: usize, c: usize| {
@@ -379,20 +388,16 @@ fn statement(net: &mut Network, auto: &mut Auto, stmt: &Stmt) -> Result<()> {
             let members = resolve_list(net, members, &Env::new())?.into_iter().map(|(t, _)| t).collect();
             net.add_group(name, members)?;
         }
-        StmtKind::At { target, pos: p } => {
-            let tensor = net.tensor_or_create(&single_name(target, &Env::new())?);
-            net.add_layout(LayoutStmt::At { tensor, pos: p.clone() })?;
-        }
-        StmtKind::Relative { target, relation, anchor, distance } => {
-            let tensor = net.tensor_or_create(&single_name(target, &Env::new())?);
-            let anchor = net.tensor_or_create(&single_name(anchor, &Env::new())?);
-            net.add_layout(LayoutStmt::Relative {
-                tensor,
-                relation: *relation,
-                anchor,
-                distance: *distance,
-            })?;
-        }
+        StmtKind::At { target, pos: p, each: clause } => each(clause, |env| {
+            let tensor = net.tensor_or_create(&single_name(target, env)?);
+            let pos = p.iter().map(|c| c.eval(env).map_err(Error::new)).collect::<Result<Vec<f64>>>()?;
+            net.add_layout(LayoutStmt::At { tensor, pos })
+        })?,
+        StmtKind::Relative { target, relation, anchor, distance, each: clause } => each(clause, |env| {
+            let tensor = net.tensor_or_create(&single_name(target, env)?);
+            let anchor = net.tensor_or_create(&single_name(anchor, env)?);
+            net.add_layout(LayoutStmt::Relative { tensor, relation: *relation, anchor, distance: *distance })
+        })?,
         StmtKind::Stack(groups) => {
             net.add_layout(LayoutStmt::Stack { groups: groups.clone() })?;
         }
@@ -408,6 +413,18 @@ fn statement(net: &mut Network, auto: &mut Auto, stmt: &Stmt) -> Result<()> {
                 SelectorAst::Legs => Selector::Legs,
                 SelectorAst::OpenLegs => Selector::OpenLegs,
                 SelectorAst::Planes => Selector::Planes,
+                SelectorAst::GroupBonds(g) => {
+                    if net.group(g).is_none() {
+                        return Err(Error::at(pos, format!("`{g}.-`: there is no group `{g}`")));
+                    }
+                    Selector::GroupBonds(g.clone())
+                }
+                // `g.leg`, for a group g, is the legs of its tensors.
+                SelectorAst::LegOf(n, LegRef::Label(l))
+                    if l == "leg" && n.subs.is_empty() && n.prime == 0 && net.group(&n.base).is_some() =>
+                {
+                    Selector::GroupLegs(n.base.clone())
+                }
                 SelectorAst::Tag(t) => Selector::Tag(t.clone()),
                 SelectorAst::Name(n) => Selector::Name(pattern(n, &env)?),
                 SelectorAst::LegOf(n, leg) => Selector::LegOf(

@@ -271,3 +271,73 @@ fn scenes_in_3d_round_trip() {
     assert!(parse("3d\nview x=(1, 0, 0), y=(2, 0, 0)\n").is_err());
     assert!(parse("light world 30\n").is_err());
 }
+
+#[test]
+fn functions_expand_where_they_are_called() {
+    let src = "let c = teal\n\
+               def comb(hub, arm, rows, n) {\n\
+                 let local = red\n\
+                 chain @hub[i], @arm[i, 1..@n]  for i in 1..@rows\n\
+                 @hub[i] below @hub[i-1]         for i in 2..@rows\n\
+                 @hub[i-1] - @hub[i]             for i in 2..@rows\n\
+                 @hub[*] [color=@local]\n\
+               }\n\
+               low: comb(H, A, 3, 2)\n\
+               high: comb(G, B, 2, 2)\n\
+               low.- [color=@c]\n\
+               low.leg [color=blue]\n\
+               H[*]: leg\n";
+    let n = net(src);
+    // 3 hubs with arms of 2, and 2 hubs with arms of 2.
+    assert_eq!(n.tensors().len(), 9 + 6);
+    assert_eq!(n.group("low").unwrap().members.len(), 9);
+    assert_eq!(n.group("high").unwrap().members.len(), 6);
+    // A local `let` works inside the body.
+    assert_eq!(attr(&n.tensor_style(t(&n, "H", &[1])), "color"), Some(&Value::Word("red".into())));
+    // Bonds within `low` take its colour; those of `high` do not.
+    for (id, index) in n.bonds() {
+        let h = index.holders();
+        let in_low = n.group("low").unwrap().members.contains(&h[0].0);
+        let colour = attr(&n.bond_style(id), "color").cloned();
+        assert_eq!(colour.is_some(), in_low, "{}", index.name);
+    }
+    // The legs of `low`'s tensors.
+    let (h1, _) = (t(&n, "H", &[1]), ());
+    assert_eq!(
+        attr(&n.leg_style(h1, n.tensor(h1).slots.len() - 1), "color"),
+        Some(&Value::Word("blue".into()))
+    );
+    // The canonical form is expanded and reads back the same.
+    let printed = to_tnv(&n);
+    assert!(
+        !printed.contains("def") && printed.contains("low.-") && printed.contains("low.leg"),
+        "{printed}"
+    );
+    assert_eq!(to_tnv(&net(&printed)), printed);
+}
+
+#[test]
+fn layout_statements_repeat_with_for() {
+    let n = net("A[i] at (2*i, -(i-1)/2, 1)  for i in 1..3\nB[i] right of A[i]  for i in 1..2\n");
+    let lay = tnviz::layout(&n).unwrap();
+    let p = lay.pos(t(&n, "A", &[3]));
+    assert!((p.x - 6.0).abs() < 1e-9 && (p.y + 1.0).abs() < 1e-9 && (p.z - 1.0).abs() < 1e-9, "{p:?}");
+    let b = lay.pos(t(&n, "B", &[2])) - lay.pos(t(&n, "A", &[2]));
+    assert!((b.x - 2.0).abs() < 1e-9);
+}
+
+#[test]
+fn function_errors() {
+    let err = |src: &str| parse(src).unwrap_err().to_string();
+    assert!(
+        err("def f(a) {\n  @a - \n}\nf(A)\n").contains("in `f`: 2:"),
+        "{}",
+        err("def f(a) {\n  @a - \n}\nf(A)\n")
+    );
+    assert!(err("def f(a) { @a }\nf(A, B)\n").contains("takes 1 arguments, not 2"));
+    assert!(err("def f(a) { f(@a) }\nf(A)\n").contains("nest more than"));
+    assert!(err("def f() { A }\ndef f() { B }\n").contains("already defined"));
+    // A call before its definition is not a call.
+    assert!(parse("f(A)\ndef f(a) { @a }\n").is_err());
+    assert!(err("x.- [color=red]\n").contains("no group `x`"));
+}

@@ -112,8 +112,22 @@ pub(crate) fn write_attrs(f: &mut impl fmt::Write, attrs: &[Attr]) -> fmt::Resul
 /// Parse the text between the brackets of an attribute list.  `pos` is the
 /// position of the opening bracket, for error messages.
 /// Replace every `@name` outside strings and math by the value of the
-/// variable `name`.
+/// variable `name`; the last declared wins.
 pub fn substitute(raw: &str, vars: &[(String, String)]) -> std::result::Result<String, String> {
+    substitute_with(raw, vars, true)
+}
+
+/// As `substitute`, but leave `@name` of an unknown variable as it is: for
+/// function bodies, whose own `let`s are known only later.
+pub fn substitute_known(raw: &str, vars: &[(String, String)]) -> String {
+    substitute_with(raw, vars, false).expect("lenient substitution does not fail")
+}
+
+fn substitute_with(
+    raw: &str,
+    vars: &[(String, String)],
+    strict: bool,
+) -> std::result::Result<String, String> {
     let mut out = String::with_capacity(raw.len());
     let (mut quote, mut math) = (false, false);
     let mut it = raw.char_indices().peekable();
@@ -136,10 +150,18 @@ pub fn substitute(raw: &str, vars: &[(String, String)]) -> std::result::Result<S
                 if name.is_empty() {
                     return Err("`@` must be followed by a variable name".into());
                 }
-                let (_, value) = vars.iter().find(|(n, _)| n == name).ok_or_else(|| {
-                    format!("unknown variable `@{name}`; declare it first with `let {name} = …`")
-                })?;
-                out.push_str(value);
+                match vars.iter().rev().find(|(n, _)| n == name) {
+                    Some((_, value)) => out.push_str(value),
+                    None if strict => {
+                        return Err(format!(
+                            "unknown variable `@{name}`; declare it first with `let {name} = …`"
+                        ));
+                    }
+                    None => {
+                        out.push('@');
+                        out.push_str(name);
+                    }
+                }
                 continue;
             }
             _ => {}

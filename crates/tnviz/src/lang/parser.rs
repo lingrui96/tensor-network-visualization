@@ -1,20 +1,37 @@
 //! Parse tokens into statements.
 
 use super::ast::*;
-use super::lexer::{Tok, Token, lex};
+use super::lexer::{Tok, Token, lex, lex_with};
 use crate::error::{Error, Pos, Result};
 use crate::model::{Dim, Direction, Relation};
-use crate::value::{Attr, parse_attrs, substitute};
+use crate::value::{Attr, parse_attrs, substitute, substitute_known};
 
 pub fn parse(src: &str) -> Result<Vec<Stmt>> {
-    Parser { toks: lex(src)?, i: 0, vars: Vec::new() }.file()
+    Parser { toks: lex(src)?, i: 0, vars: Vec::new(), funcs: Vec::new(), depth: 0 }.file()
 }
+
+/// A function: its parameters, its raw body, and the line its body starts
+/// on, for errors.
+#[derive(Clone)]
+struct Func {
+    name: String,
+    params: Vec<String>,
+    body: String,
+    line: usize,
+}
+
+/// How deeply calls may nest.
+const MAX_DEPTH: usize = 32;
 
 struct Parser {
     toks: Vec<Token>,
     i: usize,
     /// `let` variables in order of declaration, with their values expanded.
     vars: Vec<(String, String)>,
+    /// `def` functions, in order of definition.
+    funcs: Vec<Func>,
+    /// The nesting of calls this parser is in.
+    depth: usize,
 }
 
 impl Parser {
@@ -95,6 +112,8 @@ impl Parser {
             Tok::Dims(r, c) => format!("`{r}x{c}`"),
             Tok::Attrs(_) => "an attribute list".into(),
             Tok::Raw(_) => "a value".into(),
+            Tok::Body(_) => "a function body".into(),
+            Tok::Call(name, _) => format!("a call of `{name}`"),
             Tok::Sym(s) => format!("`{s}`"),
             Tok::Newline => "the end of the line".into(),
             Tok::Eof => "the end of the file".into(),
@@ -115,6 +134,13 @@ impl Parser {
             }
             if *self.peek() == Tok::Eof {
                 return Ok(stmts);
+            }
+            if self.is_ident("def") {
+                self.def_statement()?;
+                if !self.at_end() {
+                    return self.fail("expected the end of the statement");
+                }
+                continue;
             }
             if self.is_ident("let") {
                 self.let_statement()?;
@@ -294,8 +320,22 @@ impl Parser {
                     let tag = self.ident("a tag")?;
                     StmtKind::Style { selector: SelectorAst::Tag(tag), attrs: self.attrs()? }
                 }
+                // `g.- [...]`: the bonds within a group.
+                _ if self.peek_at(1) == &Tok::Sym(".")
+                    && self.peek_at(2) == &Tok::Sym("-")
+                    && matches!(self.peek_at(3), Tok::Attrs(_)) =>
+                {
+                    self.advance();
+                    self.advance();
+                    self.advance();
+                    StmtKind::Style { selector: SelectorAst::GroupBonds(w), attrs: self.attrs()? }
+                }
                 _ => self.name_statement()?,
             },
+            Tok::Call(name, args) => {
+                self.advance();
+                self.call(&name, &args, pos, None)?
+            }
             Tok::Sym("*") => {
                 self.advance();
                 StmtKind::Style { selector: SelectorAst::Tensors, attrs: self.attrs()? }
@@ -322,13 +362,19 @@ impl Parser {
             if self.eat_ident("chain") {
                 return self.chain(Some(group));
             }
+            if let Tok::Call(name, args) = self.peek().clone() {
+                let pos = self.pos();
+                self.advance();
+                return self.call(&name, &args, pos, Some(group));
+            }
             let members = self.end_list()?;
             no_legs(&members)?;
             return Ok(StmtKind::Group { name: group, members });
         }
         if self.eat_ident("at") {
             let target = self.single_name(first)?;
-            return Ok(StmtKind::At { target, pos: self.point()? });
+            let pos = self.coords()?;
+            return Ok(StmtKind::At { target, pos, each: self.for_opt()? });
         }
         let relation = if self.is_ident("right") || self.is_ident("left") {
             let right = self.is_ident("right");
@@ -348,7 +394,7 @@ impl Parser {
             let target = self.single_name(first)?;
             let anchor = self.name()?;
             let distance = if self.eat_sym(",") { Some(self.number()?) } else { None };
-            return Ok(StmtKind::Relative { target, relation, anchor, distance });
+            return Ok(StmtKind::Relative { target, relation, anchor, distance, each: self.for_opt()? });
         }
         if self.is_sym("-") {
             let mut lists = vec![first];
@@ -392,7 +438,140 @@ impl Parser {
 
     fn chain(&mut self, group: Option<String>) -> Result<StmtKind> {
         let list = self.end_list()?;
-        Ok(StmtKind::Chain { group, list, attrs: self.attrs_opt()? })
+        let attrs = self.attrs_opt()?;
+        let each = self.for_opt()?;
+        if group.is_some() && each.is_some() {
+            return self.fail("a named chain cannot repeat with `for`");
+        }
+        Ok(StmtKind::Chain { group, list, attrs, each })
+    }
+
+    /// `def name(p, q) { body }`: a function, expanded at each call.
+    fn def_statement(&mut self) -> Result<()> {
+        self.advance();
+        let pos = self.pos();
+        let name = self.ident("a function name")?;
+        self.expect_sym("(")?;
+        let mut params = Vec::new();
+        if !self.is_sym(")") {
+            params.push(self.ident("a parameter")?);
+            while self.eat_sym(",") {
+                params.push(self.ident("a parameter")?);
+            }
+        }
+        self.expect_sym(")")?;
+        let line = self.pos().line;
+        let Tok::Body(body) = self.advance() else {
+            return Err(Error::at(pos, "expected the body of the function in braces"));
+        };
+        if self.funcs.iter().any(|f| f.name == name) {
+            return Err(Error::at(pos, format!("`{name}` is already defined")));
+        }
+        self.funcs.push(Func { name, params, body, line });
+        Ok(())
+    }
+
+    /// A call: its body, with the arguments for the parameters, read as
+    /// statements.  Its own `let`s and `def`s are local to it.
+    fn call(&mut self, name: &str, args: &[String], pos: Pos, group: Option<String>) -> Result<StmtKind> {
+        let f = self
+            .funcs
+            .iter()
+            .find(|f| f.name == name)
+            .cloned()
+            .expect("the lexer knows only defined functions");
+        if args.len() != f.params.len() {
+            return Err(Error::at(
+                pos,
+                format!("`{name}` takes {} arguments, not {}", f.params.len(), args.len()),
+            ));
+        }
+        if self.depth >= MAX_DEPTH {
+            return Err(Error::at(pos, format!("calls nest more than {MAX_DEPTH} deep, at `{name}`")));
+        }
+        let mut vars = self.vars.clone();
+        for (p, a) in f.params.iter().zip(args) {
+            let a = substitute(a, &self.vars).map_err(|m| Error::at(pos, m))?;
+            vars.push((p.clone(), a));
+        }
+        let body = substitute_known(&f.body, &vars);
+        let names = self.funcs.iter().map(|f| f.name.clone()).collect();
+        let inner = |e: Error| {
+            let at = e.pos.map_or(String::new(), |p| format!("{}:{}: ", f.line + p.line - 1, p.col));
+            Error::at(pos, format!("in `{name}`: {at}{}", e.message))
+        };
+        let toks = lex_with(&body, &names).map_err(inner)?;
+        let sub = Parser { toks, i: 0, vars, funcs: self.funcs.clone(), depth: self.depth + 1 };
+        let stmts = sub.file().map_err(inner)?;
+        Ok(StmtKind::Block { group, stmts })
+    }
+
+    /// A coordinate `(x, y)` or `(x, y, z)` whose components may be
+    /// arithmetic on `for` variables, such as `(2*j, -2*(i-1))`.
+    fn coords(&mut self) -> Result<Vec<Coord>> {
+        self.expect_sym("(")?;
+        let mut p = vec![self.coord_sum()?];
+        while self.eat_sym(",") {
+            p.push(self.coord_sum()?);
+        }
+        self.expect_sym(")")?;
+        if p.len() == 2 || p.len() == 3 { Ok(p) } else { self.fail("a coordinate has 2 or 3 components") }
+    }
+
+    fn coord_sum(&mut self) -> Result<Coord> {
+        let mut a = self.coord_term()?;
+        loop {
+            let op = if self.eat_sym("+") {
+                '+'
+            } else if self.eat_sym("-") {
+                '-'
+            } else {
+                return Ok(a);
+            };
+            a = Coord::Op(op, Box::new(a), Box::new(self.coord_term()?));
+        }
+    }
+
+    fn coord_term(&mut self) -> Result<Coord> {
+        let mut a = self.coord_factor()?;
+        loop {
+            let op = if self.eat_sym("*") {
+                '*'
+            } else if self.eat_sym("/") {
+                '/'
+            } else {
+                return Ok(a);
+            };
+            a = Coord::Op(op, Box::new(a), Box::new(self.coord_factor()?));
+        }
+    }
+
+    fn coord_factor(&mut self) -> Result<Coord> {
+        match self.peek().clone() {
+            Tok::Sym("-") => {
+                self.advance();
+                Ok(Coord::Neg(Box::new(self.coord_factor()?)))
+            }
+            Tok::Sym("(") => {
+                self.advance();
+                let a = self.coord_sum()?;
+                self.expect_sym(")")?;
+                Ok(a)
+            }
+            Tok::Int(n) => {
+                self.advance();
+                Ok(Coord::Num(n as f64))
+            }
+            Tok::Num(x) => {
+                self.advance();
+                Ok(Coord::Num(x))
+            }
+            Tok::Ident(v) => {
+                self.advance();
+                Ok(Coord::Var(v))
+            }
+            _ => self.fail("expected a number or a `for` variable"),
+        }
     }
 
     // ---- Pieces ----------------------------------------------------------

@@ -19,6 +19,10 @@ pub enum Tok {
     Attrs(String),
     /// The raw value of a `let`, up to the end of its line or a `;`.
     Raw(String),
+    /// The raw body of a `def`, between its braces.
+    Body(String),
+    /// A call of a function defined earlier, with its raw arguments.
+    Call(String, Vec<String>),
     Sym(&'static str),
     Newline,
     Eof,
@@ -32,10 +36,17 @@ pub struct Token {
     pub attached: bool,
 }
 
-const SYMBOLS: [&str; 15] = ["..", "-", ":", ";", ",", "(", ")", "*", ".", "'", "[", "]", "=", "+", "#"];
+const SYMBOLS: [&str; 16] = ["..", "-", ":", ";", ",", "(", ")", "*", ".", "'", "[", "]", "=", "+", "#", "/"];
 
 pub fn lex(src: &str) -> Result<Vec<Token>> {
-    Lexer { chars: src.char_indices().collect(), src, k: 0, line: 1, col: 1, depth: 0 }.run()
+    lex_with(src, &std::collections::HashSet::new())
+}
+
+/// Lex source in which the functions `defs` are already defined, so that
+/// calls of them are read as calls.
+pub fn lex_with(src: &str, defs: &std::collections::HashSet<String>) -> Result<Vec<Token>> {
+    Lexer { chars: src.char_indices().collect(), src, k: 0, line: 1, col: 1, depth: 0, defs: defs.clone() }
+        .run()
 }
 
 struct Lexer<'a> {
@@ -46,6 +57,8 @@ struct Lexer<'a> {
     col: usize,
     /// Nesting of `(` and subscript `[`, inside which newlines are ignored.
     depth: i32,
+    /// The functions defined so far.
+    defs: std::collections::HashSet<String>,
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -115,7 +128,13 @@ impl Lexer<'_> {
                     s.push(c);
                     self.bump();
                 }
-                Tok::Ident(s)
+                let after_def = out.last().is_some_and(|t| t.tok == Tok::Ident("def".into()));
+                if self.defs.contains(&s) && self.peek(0) == Some('(') && !after_def {
+                    self.bump();
+                    Tok::Call(s, self.raw_arguments(pos)?)
+                } else {
+                    Tok::Ident(s)
+                }
             } else if c.is_ascii_digit()
                 || (c == '.'
                     && self.peek(1).is_some_and(|d| d.is_ascii_digit())
@@ -149,8 +168,22 @@ impl Lexer<'_> {
                     .len()
                     .checked_sub(3)
                     .is_none_or(|j| matches!(out[j].tok, Tok::Newline | Tok::Sym(";")));
+            // `def name(params)`: the body follows in braces.
+            let ends_def_header = tok == Tok::Sym(")") && def_header(&out).is_some();
             out.push(Token { tok, pos, attached });
             attached = true;
+            if ends_def_header {
+                let name = def_header(&out[..out.len() - 1]).unwrap();
+                while self.peek(0).is_some_and(char::is_whitespace) {
+                    self.bump();
+                }
+                if self.peek(0) != Some('{') {
+                    return Err(Error::at(self.pos(), "expected `{` and the body of the function"));
+                }
+                let pos = self.pos();
+                out.push(Token { tok: self.raw_body(pos)?, pos, attached: false });
+                self.defs.insert(name);
+            }
             if starts_let {
                 let pos = self.pos();
                 out.push(Token { tok: self.raw_value(pos)?, pos, attached: false });
@@ -201,6 +234,76 @@ impl Lexer<'_> {
             return Ok(Tok::Dims(r, c));
         }
         Err(Error::at(pos, format!("`{text}` is not a number, a length, or a size like 3x3")))
+    }
+
+    /// A function body; the lexer is at `{`.  Braces nest; strings, math,
+    /// and comments are skipped.
+    fn raw_body(&mut self, pos: Pos) -> Result<Tok> {
+        self.bump();
+        let start = self.offset();
+        let (mut depth, mut quote, mut math) = (0i32, false, false);
+        loop {
+            let Some(c) = self.peek(0) else {
+                return Err(Error::at(pos, "the function body is not closed by `}`"));
+            };
+            match c {
+                '"' if !math => quote = !quote,
+                '$' if !quote => math = !math,
+                '/' if !quote && !math && self.peek(1) == Some('/') => {
+                    while self.peek(0).is_some_and(|c| c != '\n') {
+                        self.bump();
+                    }
+                    continue;
+                }
+                '{' if !quote && !math => depth += 1,
+                '}' if !quote && !math => {
+                    if depth == 0 {
+                        let body = self.src[start..self.offset()].to_string();
+                        self.bump();
+                        return Ok(Tok::Body(body));
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            self.bump();
+        }
+    }
+
+    /// The arguments of a call, split at top-level commas; the lexer is
+    /// past `(`.
+    fn raw_arguments(&mut self, pos: Pos) -> Result<Vec<String>> {
+        let mut args = Vec::new();
+        let mut start = self.offset();
+        let (mut depth, mut quote, mut math) = (0i32, false, false);
+        loop {
+            let Some(c) = self.peek(0) else {
+                return Err(Error::at(pos, "the call is not closed by `)`"));
+            };
+            let top = depth == 0 && !quote && !math;
+            match c {
+                '"' if !math => quote = !quote,
+                '$' if !quote => math = !math,
+                '(' | '[' | '{' if !quote && !math => depth += 1,
+                ')' if top => {
+                    let last = self.src[start..self.offset()].trim().to_string();
+                    if !last.is_empty() || !args.is_empty() {
+                        args.push(last);
+                    }
+                    self.bump();
+                    return Ok(args);
+                }
+                ')' | ']' | '}' if !quote && !math => depth -= 1,
+                ',' if top => {
+                    args.push(self.src[start..self.offset()].trim().to_string());
+                    self.bump();
+                    start = self.offset();
+                    continue;
+                }
+                _ => {}
+            }
+            self.bump();
+        }
     }
 
     /// A `let` value: up to a `;`, a `//` comment, or the end of the line,
@@ -259,6 +362,27 @@ impl Lexer<'_> {
 }
 
 /// A `[` right after a name or a subscript starts a subscript.
+/// If the tokens end with `def name(p, q, …` at the start of a statement,
+/// the function's name.
+fn def_header(toks: &[Token]) -> Option<String> {
+    let k = toks.iter().rposition(|t| t.tok == Tok::Ident("def".into()))?;
+    if k > 0 && !matches!(toks[k - 1].tok, Tok::Newline | Tok::Sym(";")) {
+        return None;
+    }
+    let rest = &toks[k + 1..];
+    let (Some(Tok::Ident(name)), Some(Tok::Sym("("))) =
+        (rest.first().map(|t| &t.tok), rest.get(1).map(|t| &t.tok))
+    else {
+        return None;
+    };
+    let params = &rest[2..];
+    let ok = params
+        .iter()
+        .enumerate()
+        .all(|(i, t)| if i % 2 == 0 { matches!(t.tok, Tok::Ident(_)) } else { t.tok == Tok::Sym(",") });
+    ok.then(|| name.clone())
+}
+
 fn attached_to_name(prev: Option<char>) -> bool {
     prev.is_some_and(|p| is_ident_char(p) || p == ']')
 }

@@ -76,8 +76,10 @@ goal.
 6. **Relative units:** the language knows neither centimetres nor pixels; the
    outer layer decides the size of one unit.
 7. **Round trip:** the compiler can print any .tnv file in a canonical form.
-8. **Not a general programming language:** only arrays, ranges, wildcards,
-   and global variables; complex generation belongs in the Rust API.
+8. **A small language:** arrays, ranges, wildcards, `for` clauses, global
+   variables, and functions that expand into statements (section 6.6); no
+   conditionals and no values other than text.  Generation that needs more
+   belongs in the Rust API.
 
 ## 4. Core data model: indices
 
@@ -234,7 +236,42 @@ leg          [color=@pale]
 - The canonical form (section 3, principle 7) has no variables; they are
   expanded.
 
-### 6.6 Examples
+### 6.6 Functions
+
+```
+def comb(hub, arm, rows, n, z) {
+  chain @hub[i], @arm[i, 1..@n]   for i in 1..@rows
+  @hub[i] below @hub[i-1]          for i in 2..@rows
+  @hub[i-1] - @hub[i]              for i in 2..@rows
+  @hub[1] at (0, 0, @z)
+}
+
+low:  comb(H, A, 4, 4, 0)
+high: comb(G, B, 4, 4, 4)
+low.-  [color=@sky]            // the bonds within `low`
+high.- [color=@lilac]
+```
+
+- `def name(p, q, …) { … }` defines a function; its body is tnv statements.
+  It must be defined before it is called, and once.
+- A call `name(a, b, …)` is a statement.  Each `@p` in the body stands for
+  the text of its argument, anywhere in the body (names, ranges, numbers,
+  attribute values), as `@name` stands for a variable (section 6.5); an
+  argument may itself use variables.  The body is then read as statements
+  in place of the call.
+- `g: name(…)` makes the tensors the call creates a group `g`.
+- A body's own `let`s and `def`s are local to one call; its other names are
+  global, like everything the call creates.  Calls may nest, up to 32 deep.
+- Errors in a body give its line in the definition and the call.
+- The canonical form has no functions; calls are expanded.
+
+**`for`** repeats a statement for each integer in a range: connections,
+`chain`, `at`, relative placement, `tensor`, and `index`.  Subscripts may
+add to or subtract from the variable (`A[i-1]`); a coordinate of `at` may be
+any arithmetic of numbers and the variable with `+`, `-`, `*`, `/`, and
+parentheses, as in `A[i] at (2*i, -(i-1)/2)  for i in 1..4`.
+
+### 6.7 Examples
 
 **MPS**
 ```
@@ -588,8 +625,11 @@ creates the object.
 | one bond | `A[3] - A[4]`, or its index name `l[3]` |
 | one leg | `A.r`, `A[*].p`, `A.#2` (the second leg) |
 | built-in class | `leg.open` |
+| a group's bonds | `g.-`: bonds with both ends in group `g` |
+| a group's legs | `g.leg`: the legs of the tensors of group `g` |
 
-Precedence from low to high: type < tag / group < name.  At the same level,
+Precedence from low to high: type < tag / group (including `g.-` and
+`g.leg`) < name.  At the same level,
 later rules override earlier ones.  An attribute written on a creating
 statement counts as a name-level rule at that position.
 
@@ -827,11 +867,14 @@ plane W at (0, 0, -2) [width=8, height=6]     // placed explicitly
   sheet (default .18; its edge is drawn at 2.5 times that, at most 1), `z`,
   `corner-radius`, `padding` (for `under`), and `width`, `height`, and
   `rotate` (for `at`).  Labels on planes are not specified yet.
-- **Order.**  A plane is ordered by depth like everything else, with two
-  rules: the tensors of the group a plane is fitted `under` are drawn after
-  it where they overlap on the page, so that they rest on it; and a line
-  that crosses a plane is split where it crosses, so that the part behind
-  the plane is seen through it.
+- **Order.**  A plane passes through what it meets, and what is behind it
+  is seen through it:
+  - a line that crosses a plane is split where it crosses;
+  - a tensor that a plane cuts, such as the tensors of the group a plane is
+    fitted `under`, is drawn whole behind the plane and again, in front of
+    it, where its visible surface is nearer than the plane;
+  - a tube lying in a plane is cut along its length the same way: the half
+    of its wall above the plane is drawn again in front of it.
 
 ### 11.7 Drawing order
 

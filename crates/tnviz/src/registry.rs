@@ -174,6 +174,8 @@ pub(crate) fn targets(selector: &Selector) -> &'static [Target] {
         Selector::Tag(_) | Selector::Index(_) => BL,
         Selector::Name(_) => &[Tensor, Bond, Leg],
         Selector::Planes => &[Plane],
+        Selector::GroupBonds(_) => B,
+        Selector::GroupLegs(_) => L,
     }
 }
 

@@ -1,0 +1,32 @@
+// Two combs in 3D: the lower with legs up (cool), the upper with legs down
+// (warm), each on a translucent plane.
+3d, camera -30 22
+let grass = lime!55!green!75!black!55!white
+let sky   = cyan!35!blue!45!white
+let pink  = pink!85!magenta!70!white
+let lilac = violet!50!white
+let grey  = black!22
+
+// A comb: a hub of `rows` tensors down y, each with an arm of `n` along x,
+// at height z, with physical legs pointing `up`.
+def comb(hub, arm, rows, n, z, up, colour) {
+  chain @hub[i], @arm[i, 1..@n]   for i in 1..@rows
+  @hub[i] below @hub[i-1]          for i in 2..@rows
+  @hub[i-1] - @hub[i]              for i in 2..@rows
+  @hub[1] at (0, 0, @z)
+  @hub[*]: leg @up
+  @arm[*]: leg @up
+  @hub[*] [shape=sphere, color=@colour]
+  @arm[*] [shape=sphere, color=@colour]
+}
+
+low:  comb(H, A, 4, 4, 0, +z, @grass)
+high: comb(G, B, 4, 4, 4, -z, @pink)
+
+-        [tube, width=.16]
+low.-    [color=@sky]
+high.-   [color=@lilac]
+leg      [tube, width=.12, color=@grey, leg-length=.7]
+
+plane Pl under low  [color=cyan!45!white]
+plane Ph under high [color=pink!80!orange]
