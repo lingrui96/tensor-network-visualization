@@ -1,15 +1,14 @@
 //! The layout engine.
 
-use tnviz::layout::V3;
-use tnviz::{Layout, LayoutOptions, Name, Network, layout, parse};
+use tnviz::{Name, Network, Placement, Route, V3, layout, parse};
 
-fn lay(src: &str) -> (Network, Layout) {
+fn lay(src: &str) -> (Network, Placement) {
     let net = parse(src).unwrap_or_else(|e| panic!("{e}"));
-    let lay = layout(&net, &LayoutOptions::default()).unwrap_or_else(|e| panic!("{e}"));
+    let lay = layout(&net).unwrap_or_else(|e| panic!("{e}"));
     (net, lay)
 }
 
-fn pos(net: &Network, lay: &Layout, name: &str, subs: &[i64]) -> V3 {
+fn pos(net: &Network, lay: &Placement, name: &str, subs: &[i64]) -> V3 {
     lay.pos(net.find_tensor(&Name::new(name, subs.to_vec())).unwrap())
 }
 
@@ -49,10 +48,10 @@ fn pins_and_relative_placement() {
 #[test]
 fn conflicts_are_errors() {
     let net = parse("chain A[1..2]\nA[1] at (0, 0)\nA[2] at (5, 0)\n").unwrap();
-    let err = layout(&net, &LayoutOptions::default()).unwrap_err().to_string();
+    let err = layout(&net).unwrap_err().to_string();
     assert!(err.contains("layout conflict"), "{err}");
     let net = parse("chain A, B\nB right of A, 3\n").unwrap();
-    assert!(layout(&net, &LayoutOptions::default()).is_err());
+    assert!(layout(&net).is_err());
 }
 
 #[test]
@@ -97,18 +96,29 @@ fn legs_follow_prime_level_and_rotation() {
 }
 
 #[test]
+fn spacing_statement() {
+    let (n, l) = lay("spacing 3\nchain A[1..3]\n");
+    assert!(close(pos(&n, &l, "A", &[3]) - pos(&n, &l, "A", &[1]), V3::xy(6.0, 0.0)));
+}
+
+#[test]
 fn bond_routes() {
-    let (_, l) = lay("A at (0, 0)\nB at (4, 0)\nA.a - B.a\nA.b - B.b\nA.c - B.c\nZ.l - Z.r\n");
-    let parallel: Vec<_> = l.bonds.iter().filter(|b| b.a.tensor != b.b.tensor).collect();
-    assert_eq!(parallel.len(), 3);
-    let offsets: Vec<f64> = parallel.iter().map(|b| b.via.first().map_or(0.0, |p| p.y)).collect();
-    assert!(offsets[0] < 0.0 && offsets[1].abs() < 1e-9 && offsets[2] > 0.0);
-    let lp = l.bonds.iter().find(|b| b.a.tensor == b.b.tensor).unwrap();
-    assert_eq!(lp.via.len(), 2);
+    let (_, l) = lay("A at (0, 0)\nB at (4, 0)\nA.a - B.a\nA.b - B.b\nA.c - B.c\nZ.l - Z.r\nZ.m - Z.n\n");
+    let routes: Vec<&Route> = l.bonds.iter().map(|b| &b.route).collect();
+    assert_eq!(
+        routes,
+        [
+            &Route::Parallel { k: 0, n: 3 },
+            &Route::Parallel { k: 1, n: 3 },
+            &Route::Parallel { k: 2, n: 3 },
+            &Route::Loop { k: 0 },
+            &Route::Loop { k: 1 },
+        ]
+    );
 
     let (_, l) = lay("A at (0, 0)\nB at (4, 0)\nA - B [via=(2, 2)]\nA.#1 [leg-dir=up]\n");
     let b = &l.bonds[0];
-    assert_eq!(b.via, vec![V3::xy(2.0, 2.0)]);
+    assert_eq!(b.route, Route::Via(vec![V3::xy(2.0, 2.0)]));
     assert!(close(b.a.dir.unwrap(), V3::xy(0.0, 1.0)));
     assert!(b.b.dir.is_none());
 }

@@ -115,9 +115,10 @@ layer, so ordinary TikZ annotations stay on top of it.
 The Rust side reads and writes the tnv language described in
 `docs/language.md`.  It is a Cargo workspace:
 
-- `crates/tnviz`: the library.  `tnviz::parse` reads tnv source into a
-  `Network` (tensors, indices, groups, layout statements, and style rules),
-  and `tnviz::to_tnv` prints any network in canonical tnv.  Style rules are
+- `crates/tnviz`: the engine and its Rust API.  `tnviz::parse` reads tnv
+  source into a `Network` (tensors, indices, groups, layout statements, and
+  attribute rules checked against the registry of `docs/language.md`), and
+  `tnviz::to_tnv` prints any network in canonical tnv.  Attributes are
   resolved with `tensor_style`, `bond_style`, and `leg_style`.
 - `tnviz::layout` places a network: tensor positions, open-leg directions,
   and bond routes, in layout units.  `chain`, `grid`, `tree`, `stack`, and
@@ -133,9 +134,9 @@ cargo run -p tnviz-cli -- fmt examples/tnv/sandwich.tnv
 cargo run -p tnviz-cli -- layout examples/tnv/sandwich.tnv --svg layout.svg
 ```
 
-`tnviz layout --svg` draws a plain picture for checking layouts.  Geometry
-and rendering are not implemented yet; the TeX package above is still the
-only renderer.
+`tnviz layout --svg` draws a plain picture for checking layouts, through the
+library's `debug-svg` feature.  Geometry and rendering are not implemented
+yet; the TeX package above is still the only renderer.
 
 Build locally viewable, ignored effect images with:
 

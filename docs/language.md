@@ -20,10 +20,9 @@ Changes in v0.2:
   the exchange format.
 - Lengths are relative; the outer layer decides the physical size.
 
-Parts of this version are ahead of the implementation: the `spacing`
-statement, attribute validation, and everything after layout (sections 8 and
-12) are specified but not yet implemented, and the implementation still reads
-and writes `tnv 0.2`.
+Parts of this version are ahead of the implementation: everything after
+layout (sections 8 and 12) is specified but not yet implemented.  The
+implementation reads `tnv 0.2` and `0.3` and writes `0.3`.
 
 ## 1. Role
 
@@ -478,8 +477,9 @@ tensor W[n] (s[n], s[n]', w[n-1], w[n])  for n in 2..3
   statement only adds tags or a dimension.
 - A shared index is a bond; no separate `bond` statement is needed.
 - An index may carry a dimension: `index l[1..3] : Link [dim=8]`.
-- Quantum-number direction: `index l[1] [arrow=out]` (the arrow points from
-  the Out side to the In side).
+- Quantum-number direction: `index l[1] [arrow=forward]` draws an arrow from
+  the first tensor that holds the index to the second (`backward` the other
+  way).  Importers map a library's In and Out to these.
 - The simple syntax and the index syntax may be mixed in one file; both
   produce the same model.
 

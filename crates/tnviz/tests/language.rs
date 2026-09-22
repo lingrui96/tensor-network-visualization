@@ -1,8 +1,6 @@
 //! The examples of docs/language.md, read into networks.
 
-use tnviz::model::Dim;
-use tnviz::value::{Attr, Value};
-use tnviz::{Name, Network, parse, to_tnv};
+use tnviz::{Attr, Dim, Name, Network, Selector, Value, parse, to_tnv};
 
 fn net(src: &str) -> Network {
     parse(src).unwrap_or_else(|e| panic!("{e}\n---\n{src}"))
@@ -99,15 +97,15 @@ fn general_graph_with_hop() {
     assert_eq!(bonds(&n).len(), 4);
     let (a, b) = (t(&n, "C", &[]), t(&n, "D", &[]));
     let cd = n.bond_between(a, b).unwrap();
-    assert_eq!(attr(&n.bond_style(cd), "hop"), Some(&Value::Flag));
+    assert_eq!(attr(&n.bond_style(cd), "crossing"), Some(&Value::Word("hop".into())));
     assert_round_trip(&n);
 }
 
 #[test]
 fn scene_3d() {
     let n = net("3d, camera 35 25\ngrid T 2x2\nT[*]: leg +z\nT[*] [shape=box]\n");
-    assert_eq!(n.scene.dim, Dim::Three);
-    assert_eq!(n.scene.camera.as_ref().unwrap().angles, Some((35.0, 25.0)));
+    assert_eq!(n.scene().dim, Dim::Three);
+    assert_eq!(n.scene().camera.as_ref().unwrap().angles, Some((35.0, 25.0)));
     let t11 = t(&n, "T", &[1, 1]);
     assert_eq!(attr(&n.tensor_style(t11), "shape"), Some(&Value::Word("box".into())));
     assert_round_trip(&n);
@@ -115,7 +113,7 @@ fn scene_3d() {
 
 #[test]
 fn index_syntax_mps_and_mpo() {
-    let n = net("tnv 0.2
+    let n = net("tnv 0.3
          index s[1..4] : Site
          index l[1..3] : Link [dim=8]
          tensor A[1] (s[1], l[1])
@@ -162,7 +160,7 @@ fn cascade_order() {
     assert_eq!(attr(&style(2), "shape"), Some(&Value::Word("orb".into())));
     let (id, _) = n.bonds().next().unwrap();
     let b = n.bond_style(id);
-    assert_eq!(attr(&b, "tube"), Some(&Value::Flag));
+    assert_eq!(attr(&b, "style"), Some(&Value::Word("tube".into())));
     assert_eq!(attr(&b, "width"), Some(&Value::Number(0.3)));
 }
 
@@ -175,6 +173,12 @@ fn errors_have_positions() {
         ("tensor A (i)\ntensor B (i)\ntensor C (i)\n", "3:", "already joins two tensors"),
         ("stack nope\n", "1:", "not a group"),
         ("tnv 9.9\n", "1:", "asks for 9.9"),
+        ("A [colour=red]\n", "1:", "unknown attribute `colour`"),
+        ("A - B\nA [via=(1, 2)]\n", "2:", "`via` does not apply here"),
+        ("A - B [label-pos=2]\n", "1:", "between 0 and 1"),
+        ("A [shape=hexagon]\n", "1:", "one of rect"),
+        ("A [bold]\n", "1:", "`bold` needs a value"),
+        ("spacing 0\n", "1:", "spacing must be positive"),
         ("grid T 3\n", "1:", "size such as 3x3"),
         ("A: leg p sideways\n", "1:", "end of the statement"),
     ];
@@ -182,4 +186,38 @@ fn errors_have_positions() {
         let err = parse(src).expect_err(src).to_string();
         assert!(err.starts_with(pos) && err.contains(msg), "{src:?} gave {err:?}");
     }
+}
+
+#[test]
+fn spacing_and_versions() {
+    let n = net("tnv 0.2\nspacing 3\nchain A[1..2]\n");
+    assert_eq!(n.scene().spacing, Some(3.0));
+    assert!(to_tnv(&n).starts_with("tnv 0.3\nspacing 3\n"));
+    assert_round_trip(&n);
+}
+
+#[test]
+fn automatic_names_skip_used_ones() {
+    let n = net("tensor A (_link[1])\ntensor B (_link[1])\nC - D\n");
+    let (c, d) = (t(&n, "C", &[]), t(&n, "D", &[]));
+    let bond = n.bond_between(c, d).unwrap();
+    assert_eq!(n.index(bond).name, Name::new("_link", [2]));
+    assert!(n.index(bond).tags.contains("Link"));
+}
+
+#[test]
+fn checked_operations() {
+    // Building through the API applies no syntax sugar and checks rules.
+    let mut n = Network::new();
+    let a = n.tensor_or_create(&Name::plain("A"));
+    let i = n.index_or_create(&Name::plain("i"), 0);
+    n.attach(a, i, None).unwrap();
+    assert!(n.index(i).tags.is_empty());
+    assert!(n.add_rule(Selector::Tensor(a), &[Attr::new("color", Value::Word("red".into()))]).is_ok());
+    assert!(
+        n.add_rule(Selector::Tensor(a), &[Attr::new("via", Value::Points(vec![vec![0.0, 0.0]]))]).is_err()
+    );
+    assert!(n.add_rule(Selector::Slot(a, 5), &[]).is_err());
+    let text = to_tnv(&n);
+    assert_eq!(to_tnv(&parse(&text).unwrap()), text);
 }

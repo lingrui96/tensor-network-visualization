@@ -8,6 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::error::{Error, Result};
 use crate::name::{Name, NamePattern};
+use crate::registry;
 use crate::value::{Attr, Value, merge_attrs};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -15,11 +16,6 @@ pub struct TensorId(pub usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IndexId(pub usize);
-
-/// Base names of indices created by the simple syntax.  The leading
-/// underscore keeps them apart from hand-written names.
-pub const AUTO_LINK: &str = "_link";
-pub const AUTO_SITE: &str = "_site";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Index {
@@ -68,6 +64,8 @@ pub enum Dim {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Scene {
     pub dim: Dim,
+    /// The `spacing` statement, in layout units.
+    pub spacing: Option<f64>,
     /// An angle in 2D, or a vector in 3D.
     pub light: Option<Vec<f64>>,
     pub camera: Option<Camera>,
@@ -111,8 +109,9 @@ impl Direction {
     }
 }
 
+/// A layout statement.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Layout {
+pub enum LayoutStmt {
     At { tensor: TensorId, pos: Vec<f64> },
     Relative { tensor: TensorId, relation: Relation, anchor: TensorId, distance: Option<f64> },
     Row { tensors: Vec<TensorId> },
@@ -162,19 +161,21 @@ pub struct Rule {
     pub attrs: Vec<Attr>,
 }
 
-/// A tensor network with its layout and style.
+/// A tensor network with its layout statements and attribute rules.
+///
+/// The structure changes only through checked operations: a slot always
+/// points to an existing index, an index is held by at most two slots, and
+/// every rule has passed the attribute registry.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Network {
-    pub scene: Scene,
+    scene: Scene,
     tensors: Vec<Tensor>,
     tensor_by_name: HashMap<Name, TensorId>,
     indices: Vec<Index>,
     index_by_key: HashMap<(Name, u32), IndexId>,
     groups: Vec<Group>,
-    pub layout: Vec<Layout>,
-    pub rules: Vec<Rule>,
-    auto_links: i64,
-    auto_sites: i64,
+    layout: Vec<LayoutStmt>,
+    rules: Vec<Rule>,
 }
 
 impl Network {
@@ -211,6 +212,22 @@ impl Network {
 
     pub fn groups(&self) -> &[Group] {
         &self.groups
+    }
+
+    pub fn scene(&self) -> &Scene {
+        &self.scene
+    }
+
+    pub fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+
+    pub fn layout_statements(&self) -> &[LayoutStmt] {
+        &self.layout
+    }
+
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
     }
 
     pub fn group(&self, name: &str) -> Option<&Group> {
@@ -291,62 +308,9 @@ impl Network {
         Ok(slot)
     }
 
-    fn slot_by_label(&self, tensor: TensorId, label: &str) -> Option<usize> {
+    /// The slot of `tensor` with this label.
+    pub fn slot_by_label(&self, tensor: TensorId, label: &str) -> Option<usize> {
         self.tensor(tensor).slots.iter().position(|s| s.label.as_deref() == Some(label))
-    }
-
-    /// Connect two tensors.  Without leg labels, an existing bond between
-    /// them is reused, so `A - B` twice is one bond; labelled legs are
-    /// matched by label, and new legs are created as needed.
-    pub fn connect(
-        &mut self,
-        a: TensorId,
-        la: Option<&str>,
-        b: TensorId,
-        lb: Option<&str>,
-    ) -> Result<IndexId> {
-        let sa = la.and_then(|l| self.slot_by_label(a, l));
-        let sb = lb.and_then(|l| self.slot_by_label(b, l));
-        match (sa, sb) {
-            (Some(sa), Some(sb)) => {
-                let (ia, ib) = (self.tensor(a).slots[sa].index, self.tensor(b).slots[sb].index);
-                if ia == ib {
-                    Ok(ia)
-                } else {
-                    Err(Error::new(format!(
-                        "{}.{} and {}.{} are already used by other bonds",
-                        self.tensor(a).name,
-                        la.unwrap_or_default(),
-                        self.tensor(b).name,
-                        lb.unwrap_or_default()
-                    )))
-                }
-            }
-            (Some(sa), None) => {
-                let index = self.tensor(a).slots[sa].index;
-                self.attach(b, index, lb.map(str::to_string))?;
-                Ok(index)
-            }
-            (None, Some(sb)) => {
-                let index = self.tensor(b).slots[sb].index;
-                self.attach(a, index, la.map(str::to_string))?;
-                Ok(index)
-            }
-            (None, None) => {
-                if la.is_none()
-                    && lb.is_none()
-                    && let Some(existing) = self.bond_between(a, b)
-                {
-                    return Ok(existing);
-                }
-                self.auto_links += 1;
-                let index = self.index_or_create(&Name::new(AUTO_LINK, [self.auto_links]), 0);
-                self.index_mut(index).tags.insert("Link".into());
-                self.attach(a, index, la.map(str::to_string))?;
-                self.attach(b, index, lb.map(str::to_string))?;
-                Ok(index)
-            }
-        }
     }
 
     /// An existing bond between two tensors, if any.
@@ -360,14 +324,6 @@ impl Network {
         })
     }
 
-    /// Give a tensor a new open leg, tagged `Site`.
-    pub fn add_open_leg(&mut self, tensor: TensorId, label: Option<String>) -> Result<usize> {
-        self.auto_sites += 1;
-        let index = self.index_or_create(&Name::new(AUTO_SITE, [self.auto_sites]), 0);
-        self.index_mut(index).tags.insert("Site".into());
-        self.attach(tensor, index, label)
-    }
-
     pub fn add_group(&mut self, name: &str, members: Vec<TensorId>) -> Result<()> {
         if self.group(name).is_some() {
             return Err(Error::new(format!("group `{name}` is already defined")));
@@ -375,8 +331,85 @@ impl Network {
         if self.find_tensor(&Name::plain(name)).is_some() {
             return Err(Error::new(format!("`{name}` is already a tensor name")));
         }
+        self.check_tensors(&members)?;
         self.groups.push(Group { name: name.to_string(), members });
         Ok(())
+    }
+
+    /// Add an attribute rule.  Shorthand flags such as `tube` are expanded,
+    /// and the attributes are checked against the registry.
+    pub fn add_rule(&mut self, selector: Selector, attrs: &[Attr]) -> Result<()> {
+        match &selector {
+            Selector::Tensor(t) | Selector::Slot(t, _) => self.check_tensors(&[*t])?,
+            Selector::Index(i) if i.0 >= self.indices.len() => return Err(Error::new("no such index")),
+            _ => {}
+        }
+        if let Selector::Slot(t, k) = selector
+            && k >= self.tensor(t).slots.len()
+        {
+            return Err(Error::new(format!("{} has no leg #{}", self.tensor(t).name, k + 1)));
+        }
+        let attrs = registry::expand_flags(attrs)?;
+        registry::validate(&self.targets(&selector), &attrs)?;
+        if !attrs.is_empty() {
+            self.rules.push(Rule { selector, attrs });
+        }
+        Ok(())
+    }
+
+    /// Add a layout statement.
+    pub fn add_layout(&mut self, stmt: LayoutStmt) -> Result<()> {
+        match &stmt {
+            LayoutStmt::At { tensor, .. } => self.check_tensors(&[*tensor])?,
+            LayoutStmt::Relative { tensor, anchor, .. } => self.check_tensors(&[*tensor, *anchor])?,
+            LayoutStmt::Row { tensors } => self.check_tensors(tensors)?,
+            LayoutStmt::Tree { root, .. } => self.check_tensors(&[*root])?,
+            LayoutStmt::Grid { base, rows, cols } => {
+                for r in 1..=*rows {
+                    for c in 1..=*cols {
+                        let name = Name::new(base.clone(), [r as i64, c as i64]);
+                        if self.find_tensor(&name).is_none() {
+                            return Err(Error::new(format!("grid {base} has no tensor {name}")));
+                        }
+                    }
+                }
+            }
+            LayoutStmt::Stack { groups } => {
+                if let Some(g) = groups.iter().find(|g| self.group(g).is_none()) {
+                    return Err(Error::new(format!("`{g}` is not a group")));
+                }
+            }
+        }
+        self.layout.push(stmt);
+        Ok(())
+    }
+
+    /// What a selector may pick.  A name pattern may name tensors, groups,
+    /// or indices; when it already matches something, only the kinds it
+    /// matches count, and otherwise every kind does, since rules also apply
+    /// to objects created later.
+    fn targets(&self, selector: &Selector) -> Vec<registry::Target> {
+        use registry::Target;
+        let Selector::Name(p) = selector else { return registry::targets(selector).to_vec() };
+        let mut found = Vec::new();
+        let group = p.is_bare() && self.group(&p.base).is_some();
+        if group || self.tensors().any(|(_, t)| p.matches(&t.name, 0)) {
+            found.push(Target::Tensor);
+        }
+        for (_, i) in self.indices().filter(|(_, i)| p.matches(&i.name, i.prime)) {
+            let t = if i.is_open() { Target::Leg } else { Target::Bond };
+            if !found.contains(&t) {
+                found.push(t);
+            }
+        }
+        if found.is_empty() { registry::targets(selector).to_vec() } else { found }
+    }
+
+    fn check_tensors(&self, ids: &[TensorId]) -> Result<()> {
+        match ids.iter().find(|t| t.0 >= self.tensors.len()) {
+            Some(_) => Err(Error::new("no such tensor")),
+            None => Ok(()),
+        }
     }
 
     // ---- Style -----------------------------------------------------------

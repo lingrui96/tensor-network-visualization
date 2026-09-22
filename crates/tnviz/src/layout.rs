@@ -8,15 +8,17 @@
 //! blocks only translate and pinned blocks stay put.  Everything is
 //! deterministic.
 //!
-//! The result says nothing about shapes: where a bond meets a tensor's
-//! outline is decided later, when shapes are known.
+//! The result says nothing about shapes.  Where a bond meets a tensor's
+//! outline, how long an open leg is, and how far parallel bonds and loops
+//! bend out are geometry, decided when shapes are known; layout only records
+//! that a bond is one of several parallel bonds, or a loop.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ops::{Add, Mul, Sub};
 
 use crate::error::{Error, Result};
-use crate::model::{Direction, IndexId, Layout as Stmt, Network, Relation, TensorId};
-use crate::value::{Attr, Value};
+use crate::model::{Direction, IndexId, LayoutStmt as Stmt, Network, Relation, TensorId};
+use crate::registry;
 
 // ---- Vectors --------------------------------------------------------------
 
@@ -85,22 +87,8 @@ impl Mul<f64> for V3 {
 
 // ---- Result ---------------------------------------------------------------
 
-#[derive(Clone, Debug)]
-pub struct LayoutOptions {
-    /// Distance between neighbouring tensors in chains, grids, trees,
-    /// stacks, and relative placements without a distance.
-    pub spacing: f64,
-    /// Length of open legs without `leg-length`.
-    pub leg_length: f64,
-    /// Sideways offset between parallel bonds.
-    pub parallel_offset: f64,
-}
-
-impl Default for LayoutOptions {
-    fn default() -> Self {
-        LayoutOptions { spacing: 2.0, leg_length: 0.6, parallel_offset: 0.35 }
-    }
-}
+/// The default of the `spacing` statement.
+pub const DEFAULT_SPACING: f64 = 2.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedTensor {
@@ -119,13 +107,25 @@ pub struct BondEnd {
     pub dir: Option<V3>,
 }
 
+/// How a bond's centreline runs between its ends.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Route {
+    /// Straight between the ends (after any ports).
+    Direct,
+    /// Through these points, from `a` to `b`.
+    Via(Vec<V3>),
+    /// Bond `k` of `n` parallel bonds between the same two tensors.
+    Parallel { k: usize, n: usize },
+    /// The `k`-th loop from a tensor to itself.
+    Loop { k: usize },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedBond {
     pub index: IndexId,
     pub a: BondEnd,
     pub b: BondEnd,
-    /// Intermediate points of the centreline, from `a` to `b`.
-    pub via: Vec<V3>,
+    pub route: Route,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -135,36 +135,40 @@ pub struct PlacedLeg {
     pub index: IndexId,
     /// Unit direction in world coordinates.
     pub dir: V3,
-    pub length: f64,
 }
 
+/// The result of layout.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Layout {
+pub struct Placement {
     /// Indexed by `TensorId`.
     pub tensors: Vec<PlacedTensor>,
     pub bonds: Vec<PlacedBond>,
     pub legs: Vec<PlacedLeg>,
 }
 
-impl Layout {
+impl Placement {
     pub fn pos(&self, t: TensorId) -> V3 {
         self.tensors[t.0].pos
     }
 }
 
 /// Lay out a network.
-pub fn layout(net: &Network, opts: &LayoutOptions) -> Result<Layout> {
+pub fn layout(net: &Network) -> Result<Placement> {
+    let spacing = net.scene().spacing.unwrap_or(DEFAULT_SPACING);
     let n = net.tensors().len();
     let mut rigid = Rigid::new(n);
-    for stmt in &net.layout {
-        apply(net, opts, &mut rigid, stmt)?;
+    for stmt in net.layout_statements() {
+        apply(net, spacing, &mut rigid, stmt)?;
     }
-    let pos = place(net, opts, &mut rigid);
+    let pos = place(net, spacing, &mut rigid);
     let tensors = (0..n)
-        .map(|k| PlacedTensor { pos: pos[k], rotation: number(&net.tensor_style(TensorId(k)), "rotate") })
+        .map(|k| PlacedTensor {
+            pos: pos[k],
+            rotation: registry::angle(&net.tensor_style(TensorId(k)), "rotate").unwrap_or(0.0),
+        })
         .collect();
-    let mut out = Layout { tensors, bonds: Vec::new(), legs: Vec::new() };
-    route(net, opts, &mut out);
+    let mut out = Placement { tensors, bonds: Vec::new(), legs: Vec::new() };
+    route(net, &mut out);
     Ok(out)
 }
 
@@ -231,8 +235,7 @@ impl Rigid {
     }
 }
 
-fn apply(net: &Network, opts: &LayoutOptions, rigid: &mut Rigid, stmt: &Stmt) -> Result<()> {
-    let s = opts.spacing;
+fn apply(net: &Network, s: f64, rigid: &mut Rigid, stmt: &Stmt) -> Result<()> {
     let name = |t: TensorId| net.tensor(t).name.to_string();
     let conflict = |what: &str| Error::new(format!("layout conflict: {what} contradicts earlier placement"));
     match stmt {
@@ -363,9 +366,8 @@ fn adjacency(net: &Network) -> Vec<Vec<usize>> {
 
 // ---- Automatic placement ----------------------------------------------------
 
-fn place(net: &Network, opts: &LayoutOptions, rigid: &mut Rigid) -> Vec<V3> {
+fn place(net: &Network, s: f64, rigid: &mut Rigid) -> Vec<V3> {
     let n = net.tensors().len();
-    let s = opts.spacing;
     let adj = adjacency(net);
     let roots: Vec<usize> = (0..n).map(|i| rigid.find(i).0).collect();
     let offsets: Vec<V3> = (0..n).map(|i| rigid.find(i).1).collect();
@@ -714,57 +716,36 @@ pub fn direction_vector(dir: &Direction) -> Option<V3> {
     d.unit()
 }
 
-/// A direction stored as an attribute value.
-fn value_direction(v: &Value) -> Option<Direction> {
-    Some(match v {
-        Value::Number(a) => Direction::Angle(*a),
-        Value::Word(w) if w.starts_with('+') || w.starts_with('-') => Direction::Axis(w.clone()),
-        Value::Word(w) => Direction::Word(w.clone()),
-        Value::Points(p) if p.len() == 1 => Direction::Vector(p[0].clone()),
-        _ => return None,
-    })
-}
-
-fn number(attrs: &[Attr], key: &str) -> f64 {
-    match attrs.iter().find(|a| a.key == key).map(|a| &a.value) {
-        Some(Value::Number(x)) => *x,
-        _ => 0.0,
-    }
-}
-
 /// The world direction of a slot's `leg-dir`, if set.
-fn slot_direction(net: &Network, out: &Layout, t: TensorId, slot: usize) -> Option<V3> {
-    let style = net.leg_style(t, slot);
-    let v = style.iter().find(|a| a.key == "leg-dir")?;
-    let local = direction_vector(&value_direction(&v.value)?)?;
+fn slot_direction(net: &Network, out: &Placement, t: TensorId, slot: usize) -> Option<V3> {
+    let local = direction_vector(&registry::direction(&net.leg_style(t, slot), "leg-dir")?)?;
     Some(local.rotate_z(out.tensors[t.0].rotation))
 }
 
-fn route(net: &Network, opts: &LayoutOptions, out: &mut Layout) {
-    // Open legs.
+fn route(net: &Network, out: &mut Placement) {
+    // Open legs: `leg-dir`, or by prime level.
     for (id, index) in net.open_legs() {
         let (t, slot) = index.holders()[0];
         let dir = slot_direction(net, out, t, slot).unwrap_or_else(|| {
             let local = if index.prime == 0 { V3::xy(0.0, -1.0) } else { V3::xy(0.0, 1.0) };
             local.rotate_z(out.tensors[t.0].rotation)
         });
-        let style = net.leg_style(t, slot);
-        let length = match style.iter().find(|a| a.key == "leg-length").map(|a| &a.value) {
-            Some(Value::Number(x)) => *x,
-            _ => opts.leg_length,
-        };
-        out.legs.push(PlacedLeg { tensor: t, slot, index: id, dir, length });
+        out.legs.push(PlacedLeg { tensor: t, slot, index: id, dir });
     }
 
-    // Bonds, with parallel bonds between the same pair fanned out.
+    // Bonds, grouped by the pair of tensors they join.
     let mut by_pair: BTreeMap<(usize, usize), Vec<IndexId>> = BTreeMap::new();
     for (id, index) in net.bonds() {
         let (a, b) = (index.holders()[0].0.0, index.holders()[1].0.0);
         by_pair.entry((a.min(b), a.max(b))).or_default().push(id);
     }
     for ((ta, tb), ids) in by_pair {
-        let count = ids.len();
-        for (k, id) in ids.into_iter().enumerate() {
+        let unrouted: Vec<IndexId> = ids
+            .iter()
+            .copied()
+            .filter(|id| registry::points(&net.bond_style(*id), "via").is_none())
+            .collect();
+        for id in ids {
             let index = net.index(id);
             let [(a, sa), (b, sb)] = [index.holders()[0], index.holders()[1]];
             let end = |t: TensorId, slot: usize| BondEnd {
@@ -772,24 +753,20 @@ fn route(net: &Network, opts: &LayoutOptions, out: &mut Layout) {
                 slot,
                 dir: slot_direction(net, out, t, slot),
             };
-            let style = net.bond_style(id);
-            let mut via: Vec<V3> = match style.iter().find(|a| a.key == "via").map(|a| &a.value) {
-                Some(Value::Points(points)) => points.iter().map(|p| V3::from_slice(p)).collect(),
-                _ => Vec::new(),
-            };
-            if via.is_empty() {
-                let (pa, pb) = (out.pos(a), out.pos(b));
-                if ta == tb {
-                    // A loop over the tensor.
-                    let r = opts.spacing * 0.35 * (k + 1) as f64;
-                    via = vec![pa + V3::xy(-r * 0.6, r * 1.4), pa + V3::xy(r * 0.6, r * 1.4)];
-                } else if count > 1 {
-                    let side = k as f64 - (count - 1) as f64 / 2.0;
-                    let normal = V3::xy(-(pb - pa).y, (pb - pa).x).unit().unwrap_or(V3::xy(0.0, 1.0));
-                    via = vec![(pa + pb) * 0.5 + normal * (side * opts.parallel_offset)];
+            let route = match registry::points(&net.bond_style(id), "via") {
+                Some(points) => Route::Via(points.iter().map(|p| V3::from_slice(p)).collect()),
+                None => {
+                    let k = unrouted.iter().position(|u| *u == id).unwrap();
+                    if ta == tb {
+                        Route::Loop { k }
+                    } else if unrouted.len() > 1 {
+                        Route::Parallel { k, n: unrouted.len() }
+                    } else {
+                        Route::Direct
+                    }
                 }
-            }
-            out.bonds.push(PlacedBond { index: id, a: end(a, sa), b: end(b, sb), via });
+            };
+            out.bonds.push(PlacedBond { index: id, a: end(a, sa), b: end(b, sb), route });
         }
     }
 }

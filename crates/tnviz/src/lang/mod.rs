@@ -3,14 +3,13 @@
 //!
 //! [`Network`]: crate::model::Network
 
-pub mod ast;
+mod ast;
 mod lexer;
 mod lower;
 mod parser;
 mod print;
 
 pub use lower::VERSION;
-pub use parser::parse as parse_statements;
 pub use print::to_tnv;
 
 use crate::error::Result;

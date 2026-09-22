@@ -5,7 +5,7 @@
 use std::fmt::Write;
 
 use super::lower::VERSION;
-use crate::model::{Dim, Direction, Layout, LegKey, Network, Relation, Selector, index_display};
+use crate::model::{Dim, Direction, LayoutStmt, LegKey, Network, Relation, Selector, index_display};
 use crate::value::{format_number, write_attrs, write_point};
 
 pub fn to_tnv(net: &Network) -> String {
@@ -17,10 +17,14 @@ pub fn to_tnv(net: &Network) -> String {
 
 fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
     writeln!(o, "tnv {VERSION}")?;
-    if net.scene.dim == Dim::Three {
+    let scene = net.scene();
+    if scene.dim == Dim::Three {
         writeln!(o, "3d")?;
     }
-    if let Some(light) = &net.scene.light {
+    if let Some(d) = scene.spacing {
+        writeln!(o, "spacing {}", format_number(d))?;
+    }
+    if let Some(light) = &scene.light {
         match light.as_slice() {
             [angle] => writeln!(o, "light {}", format_number(*angle))?,
             v => {
@@ -30,7 +34,7 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
             }
         }
     }
-    if let Some(cam) = &net.scene.camera {
+    if let Some(cam) = &scene.camera {
         o.push_str("camera");
         if let Some((az, el)) = cam.angles {
             write!(o, " {} {}", format_number(az), format_number(el))?;
@@ -86,17 +90,17 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
         writeln!(o, "{}: {}", g.name, members.join(", "))?;
     }
 
-    if !net.layout.is_empty() {
+    if !net.layout_statements().is_empty() {
         o.push('\n');
     }
     let name = |t| net.tensor(t).name.to_string();
-    for l in &net.layout {
+    for l in net.layout_statements() {
         match l {
-            Layout::At { tensor, pos } => {
+            LayoutStmt::At { tensor, pos } => {
                 write!(o, "{} at ", name(*tensor))?;
                 write_point(o, pos)?;
             }
-            Layout::Relative { tensor, relation, anchor, distance } => {
+            LayoutStmt::Relative { tensor, relation, anchor, distance } => {
                 let rel = match relation {
                     Relation::RightOf => "right of",
                     Relation::LeftOf => "left of",
@@ -108,13 +112,13 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
                     write!(o, ", {}", format_number(*d))?;
                 }
             }
-            Layout::Row { tensors } => {
+            LayoutStmt::Row { tensors } => {
                 let names: Vec<String> = tensors.iter().map(|t| name(*t)).collect();
                 write!(o, "chain {}", names.join(", "))?;
             }
-            Layout::Grid { base, rows, cols } => write!(o, "grid {base} {rows}x{cols}")?,
-            Layout::Stack { groups } => write!(o, "stack {}", groups.join(", "))?,
-            Layout::Tree { root, direction } => {
+            LayoutStmt::Grid { base, rows, cols } => write!(o, "grid {base} {rows}x{cols}")?,
+            LayoutStmt::Stack { groups } => write!(o, "stack {}", groups.join(", "))?,
+            LayoutStmt::Tree { root, direction } => {
                 write!(o, "tree {} ", name(*root))?;
                 write_direction(o, direction)?;
             }
@@ -122,10 +126,10 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
         o.push('\n');
     }
 
-    if !net.rules.is_empty() {
+    if !net.rules().is_empty() {
         o.push('\n');
     }
-    for r in &net.rules {
+    for r in net.rules() {
         match &r.selector {
             Selector::Tensors => o.push('*'),
             Selector::Bonds => o.push('-'),

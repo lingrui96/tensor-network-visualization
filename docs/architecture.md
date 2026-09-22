@@ -216,11 +216,22 @@ Placed correctly: the parser, lowering, and canonical printer; the style
 cascade; the layout algorithm itself (rigid blocks, multidimensional scaling,
 stress majorization, orientation).
 
+Resolved: E1 (the simple syntax's rules are in `lang::lower`), E2 and E3
+(the registry validates every rule, and stages read attributes through its
+typed accessors; language v0.3 settles that all categories share one
+cascade), E4 (layout records parallel bonds and loops as route intents and
+leaves sizes and leg lengths to geometry), E5 (the `spacing` statement), E6
+(stages are private modules; the crate root exports the API, and the model
+changes only through checked operations), E7 (`LayoutStmt` and
+`Placement`).  E8 remains.
+
 ### 6.3 CLI (crates/tnviz-cli)
 
 | # | Finding | Should be |
 |---|---|---|
 | C1 | `debug_svg` draws pictures inside the command-line tool, with its own port length (main.rs, lines 80–137). | A backend; the CLI only connects stages. |
+
+Resolved: `debug_svg` is a backend module behind the `debug-svg` feature.
 
 ### 6.4 TeX layer (tex/tnviz.sty)
 

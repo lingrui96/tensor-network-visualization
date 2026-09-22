@@ -11,4 +11,4 @@ name = "tnviz"
 path = "src/main.rs"
 
 [dependencies]
-tnviz = { path = "../tnviz" }
+tnviz = { path = "../tnviz", features = ["debug-svg"] }

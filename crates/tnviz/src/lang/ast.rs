@@ -73,6 +73,7 @@ pub enum SelectorAst {
 pub enum StmtKind {
     Version(String),
     Scene(Dim),
+    Spacing(f64),
     Light(Vec<f64>),
     Camera {
         angles: Option<(f64, f64)>,

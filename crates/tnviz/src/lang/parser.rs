@@ -140,6 +140,10 @@ impl Parser {
                     self.advance();
                     StmtKind::Scene(if w == "2d" { Dim::Two } else { Dim::Three })
                 }
+                "spacing" => {
+                    self.advance();
+                    StmtKind::Spacing(self.number()?)
+                }
                 "light" => {
                     self.advance();
                     if self.is_sym("(") {

@@ -7,3 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+
+[features]
+# A plain SVG of a placement, for checking layouts.
+debug-svg = []
