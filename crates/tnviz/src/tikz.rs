@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use crate::geometry::{
     Anchor, ArrowGeom, Cap, Geometry, GeometryOptions, LabelOwner, LabelText, LineKind, Path, Piece,
-    tube_outline, tube_sides,
+    tube_region, tube_sides,
 };
 use crate::layout::V3;
 use crate::lighting::{ArrowLook, Colour, LabelColour, Lighting, LineLook, Other, Shading, Stroke};
@@ -202,9 +202,20 @@ impl Writer<'_> {
                 let own =
                     |at: f64, end: f64, kind: Cap| if (at - end).abs() < 1e-9 { kind } else { Cap::Flat };
                 let caps = (own(from, 0.0, line.caps.0), own(to, total, line.caps.1));
-                shade(s, &path_code(&tube_outline(&piece, r, caps)), shading);
+                // Where the tube meets its tensors, at the line's own ends.
+                let at_start = (from - 0.0).abs() < 1e-9;
+                let at_end = (to - total).abs() < 1e-9;
+                let junctions = [
+                    line.junctions[0].as_deref().filter(|_| at_start),
+                    line.junctions[1].as_deref().filter(|_| at_end),
+                ];
+                shade(s, &path_code(&tube_region(&piece, r, caps, junctions)), shading);
                 for side in tube_sides(&piece, r) {
                     self.stroke(s, &path_code(&side), outline, "round");
+                }
+                for curve in junctions.into_iter().flatten() {
+                    let pieces = curve.windows(2).map(|w| Piece::Line { a: w[0], b: w[1] }).collect();
+                    self.stroke(s, &path_code(&Path { pieces, closed: false }), outline, "round");
                 }
                 let arc = |p: V3, d: V3| Path {
                     pieces: vec![Piece::Arc {
@@ -215,11 +226,11 @@ impl Writer<'_> {
                     }],
                     closed: false,
                 };
-                if caps.0 == Cap::Round {
+                if caps.0 == Cap::Round && junctions[0].is_none() {
                     let (p, d) = piece.at(0.0);
                     self.stroke(s, &path_code(&arc(p, -d)), outline, "round");
                 }
-                if caps.1 == Cap::Round {
+                if caps.1 == Cap::Round && junctions[1].is_none() {
                     let (p, d) = piece.at(piece.length());
                     self.stroke(s, &path_code(&arc(p, d)), outline, "round");
                 }

@@ -120,11 +120,61 @@ fn fillet3(points: &[V3], bend: f64) -> Line3 {
     Line3 { points: out }
 }
 
+/// Where a tube of radius `r` leaving `solid` at its surface point `p`,
+/// along `out`, meets the solid, on the page: for each line along the tube's
+/// wall, the point where it leaves the solid, over the half of the wall that
+/// faces the viewer.  At the start of a line (`start`) the curve runs from
+/// the tube's right side to its left, at the end from left to right, as
+/// `tube_region` wants.  None for a tube seen end on.
+fn junction(solid: &Solid, p: V3, out: V3, r: f64, view: &View, start: bool) -> Option<Vec<V3>> {
+    // Across the tube on the page (its left, along the line), and towards
+    // the viewer, both perpendicular to the axis.
+    let along = view.apply(if start { out } else { -out });
+    let d = V3::xy(along.x, along.y).unit()?;
+    let e = V3::xy(-d.y, d.x);
+    let axis = view.apply(out).unit()?;
+    let mut w = cross(axis, e).unit()?;
+    if w.z < 0.0 {
+        w = -w;
+    }
+    let (e, w) = (view.inverse(e), view.inverse(w));
+    let steps = 24;
+    let pts = (0..=steps)
+        .map(|i| {
+            let f = i as f64 / steps as f64;
+            let theta = if start { std::f64::consts::PI * (1.0 - f) } else { std::f64::consts::PI * f };
+            let base = p + (e * theta.cos() + w * theta.sin()) * r;
+            // Along the wall line base + out t: inside at t_lo, outside at t_hi.
+            let (mut lo, mut hi) = (-3.0 * r - 0.05, 3.0 * r + 0.05);
+            let t = if solid.outside(base + out * lo) > 0.0 {
+                0.0
+            } else {
+                while solid.outside(base + out * hi) <= 0.0 && hi < 1e3 {
+                    hi *= 2.0;
+                }
+                for _ in 0..50 {
+                    let mid = (lo + hi) / 2.0;
+                    if solid.outside(base + out * mid) > 0.0 {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                (lo + hi) / 2.0
+            };
+            view.page(base + out * t)
+        })
+        .collect();
+    Some(pts)
+}
+
 /// A projected line: its page centreline and the view direction of each
 /// piece.
 struct Projected {
     path: Path,
     axes: Vec<V3>,
+    /// Where a tube meets its tensors (see `junction`).
+    junctions: [Option<Vec<V3>>; 2],
 }
 
 fn project(line: &Line3, view: &View) -> Projected {
@@ -144,7 +194,7 @@ fn project(line: &Line3, view: &View) -> Projected {
         pieces.push(Piece::Line { a, b: a + V3::xy(1e-4, 0.0) });
         axes.push(V3::new(0.0, 0.0, 1.0));
     }
-    Projected { path: Path { pieces, closed: false }, axes }
+    Projected { path: Path { pieces, closed: false }, axes, junctions: [None, None] }
 }
 
 impl Builder<'_> {
@@ -186,7 +236,13 @@ impl Builder<'_> {
                 } else {
                     (*base_at, total, (Cap::Flat, line.caps.1))
                 };
-                line.outline = Some(tube_outline(&line.centerline.slice(s0, s1), line.width / 2.0, caps));
+                // The other end keeps its junction with its tensor.
+                let j = if *forward {
+                    [line.junctions[0].as_deref(), None]
+                } else {
+                    [None, line.junctions[1].as_deref()]
+                };
+                line.outline = Some(tube_region(&line.centerline.slice(s0, s1), line.width / 2.0, caps, j));
             }
         }
         let spans: Vec<Vec<Span>> =
@@ -340,9 +396,23 @@ impl Builder<'_> {
         let from = full.leaves(sa);
         let to = full.length() - full.reversed().leaves(sb);
         let visible = if to > from + 1e-6 { full.slice(from, to) } else { full.slice(from, from + 1e-4) };
-        let proj = project(&visible, view);
+        let mut proj = project(&visible, view);
         let caps = (Cap::Round, Cap::Round);
-        (self.line3(b.index, LineKind::Bond, style, width, caps, &proj), visible)
+        proj.junctions = if style == LineStyle::Tube {
+            let n = visible.points.len();
+            let (p0, p1) = (visible.points[0], visible.points[n - 1]);
+            [
+                (visible.points[1] - p0)
+                    .unit()
+                    .and_then(|out| junction(sa, p0, out, width / 2.0, view, true)),
+                (visible.points[n - 2] - p1)
+                    .unit()
+                    .and_then(|out| junction(sb, p1, out, width / 2.0, view, false)),
+            ]
+        } else {
+            [None, None]
+        };
+        (self.line3(b.index, LineKind::Bond, style, width, caps, proj), visible)
     }
 
     /// Where open legs leave their solids: as `leg_offsets`, across the
@@ -397,7 +467,13 @@ impl Builder<'_> {
         let line = Line3 { points: vec![first, first + leg.dir * length] };
         let proj = project(&line, view);
         let cap = if word(&attrs, "cap") == Some("flat") { Cap::Flat } else { Cap::Round };
-        (self.line3(leg.index, LineKind::Leg, style, width, (Cap::Round, cap), &proj), line)
+        let mut proj = proj;
+        proj.junctions = if style == LineStyle::Tube {
+            [junction(&solids[leg.tensor.0], first, leg.dir, width / 2.0, view, true), None]
+        } else {
+            [None, None]
+        };
+        (self.line3(leg.index, LineKind::Leg, style, width, (Cap::Round, cap), proj), line)
     }
 
     fn line3(
@@ -407,21 +483,26 @@ impl Builder<'_> {
         style: LineStyle,
         width: f64,
         caps: (Cap, Cap),
-        proj: &Projected,
+        proj: Projected,
     ) -> LineGeom {
-        let outline = (style == LineStyle::Tube).then(|| tube_outline(&proj.path, width / 2.0, caps));
+        let junctions = proj.junctions;
+        let length = proj.path.length();
+        let outline = (style == LineStyle::Tube).then(|| {
+            tube_region(&proj.path, width / 2.0, caps, [junctions[0].as_deref(), junctions[1].as_deref()])
+        });
         LineGeom {
             index,
             kind,
             style,
             width,
-            centerline: proj.path.clone(),
+            centerline: proj.path,
             outline,
             caps,
-            visible: (0.0, proj.path.length()),
+            visible: (0.0, length),
             arrow: None,
-            axes: proj.axes.clone(),
+            axes: proj.axes,
             spans: Vec::new(),
+            junctions,
         }
     }
 }

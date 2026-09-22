@@ -777,7 +777,11 @@ these names are errors in a 2D scene.
   boundary distance, and every bend is a circular arc in the plane of its
   corner.  Open legs are as in section 8.5.
 - A centreline is cut where it enters its end tensors, so that no line runs
-  inside a solid; the visible part is what remains.
+  inside a solid; the visible part is what remains.  A tube ends there not
+  in a cap but in the curve where its wall meets the tensor's surface, so
+  that it looks inserted into the tensor: on the page, the part of that
+  curve on the wall's half facing the viewer, stroked as the tube's
+  outline.  Only a leg's free end has a cap.
 - A **line** is drawn as its projected centreline with its width in `em`,
   whatever its depth.  A **tube** is the solid of points within `width` / 2
   of the centreline; under the orthographic view its outline is the

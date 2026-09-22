@@ -12,7 +12,7 @@ mod space;
 
 use std::collections::{BTreeMap, HashMap};
 
-pub use path::{Cap, Path, Piece, tube_sides};
+pub use path::{Cap, Path, Piece, tube_region, tube_sides};
 pub use shape::Shape;
 pub use solid::{Patch, View, edge_toward};
 
@@ -113,6 +113,10 @@ pub struct LineGeom {
     /// (section 11.7).  Empty in 2D.
     pub axes: Vec<V3>,
     pub spans: Vec<Span>,
+    /// In 3D, for a tube: where it meets its tensors on the page, at its
+    /// start and end (see `tube_region`).  None in 2D, where tensors cover
+    /// the ends of their lines.
+    pub junctions: [Option<Vec<V3>>; 2],
 }
 
 /// A part of a line, by arc length, drawn at one depth.
@@ -576,6 +580,7 @@ impl Builder<'_> {
                 arrow: None,
                 axes: Vec::new(),
                 spans: Vec::new(),
+                junctions: [None, None],
             },
             vertices,
             filleted,
@@ -665,6 +670,7 @@ impl Builder<'_> {
             arrow: None,
             axes: Vec::new(),
             spans: Vec::new(),
+            junctions: [None, None],
         }
     }
 

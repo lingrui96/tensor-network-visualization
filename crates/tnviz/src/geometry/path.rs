@@ -398,6 +398,30 @@ pub enum Cap {
 /// The outline of the points within `r` of an open centreline: its left
 /// side forward, the end cap, its right side back, and the start cap.
 /// Fillets on the inner side shrink to a point when tighter than `r`.
+/// A tube's outline whose ends may be the curves where it meets a tensor,
+/// on the page: `junctions[0]` runs from the right side to the left at the
+/// start, `junctions[1]` from the left side to the right at the end.  Ends
+/// without a junction take their caps.
+pub fn tube_region(center: &Path, r: f64, caps: (Cap, Cap), junctions: [Option<&[V3]>; 2]) -> Path {
+    let caps = (
+        if junctions[0].is_some() { Cap::Flat } else { caps.0 },
+        if junctions[1].is_some() { Cap::Flat } else { caps.1 },
+    );
+    let mut outline = tube_outline(center, r, caps);
+    let n = center.pieces.len();
+    let curve =
+        |pts: &[V3]| -> Vec<Piece> { pts.windows(2).map(|w| Piece::Line { a: w[0], b: w[1] }).collect() };
+    let mut pieces = Vec::new();
+    for (k, piece) in outline.pieces.drain(..).enumerate() {
+        match (k, &junctions) {
+            (k, [_, Some(end)]) if k == n => pieces.extend(curve(end)),
+            (k, [Some(start), _]) if k == 2 * n + 1 => pieces.extend(curve(start)),
+            _ => pieces.push(piece),
+        }
+    }
+    Path { pieces, closed: true }
+}
+
 /// The two sides of a tube, open paths at `r` to the left and the right of
 /// its centreline, both in the centreline's direction.
 pub fn tube_sides(center: &Path, r: f64) -> [Path; 2] {
