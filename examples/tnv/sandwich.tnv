@@ -1,0 +1,10 @@
+// <psi|O|psi>: an MPO between an MPS and its conjugate.
+ket: chain A[1..4]
+op:  chain W[1..4]
+bra: chain B[1..4]
+A[1..4] - W[1..4] - B[1..4]
+stack bra, op, ket
+
+op [shape=rect, color=teal]
+- [tube]
+A[2] - W[2] [label=$\chi$]

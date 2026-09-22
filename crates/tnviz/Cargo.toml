@@ -1,0 +1,9 @@
+[package]
+name = "tnviz"
+description = "Tensor-network diagrams: the tnv language and its data model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

@@ -110,6 +110,26 @@ layer, so ordinary TikZ annotations stay on top of it.
   distance to its silhouette in a direction, so 3D solids can plug in their
   own answer.
 
+## Rust
+
+The Rust side reads and writes the tnv language described in
+`docs/language.md`.  It is a Cargo workspace:
+
+- `crates/tnviz`: the library.  `tnviz::parse` reads tnv source into a
+  `Network` (tensors, indices, groups, layout statements, and style rules),
+  and `tnviz::to_tnv` prints any network in canonical tnv.  Style rules are
+  resolved with `tensor_style`, `bond_style`, and `leg_style`.
+- `crates/tnviz-cli`: the `tnviz` command.
+
+```sh
+cargo test
+cargo run -p tnviz-cli -- check examples/tnv/sandwich.tnv
+cargo run -p tnviz-cli -- fmt examples/tnv/sandwich.tnv
+```
+
+Layout and rendering are not implemented yet; the TeX package above is still
+the only renderer.
+
 Build locally viewable, ignored effect images with:
 
 ```sh
