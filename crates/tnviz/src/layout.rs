@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ops::{Add, Mul, Sub};
 
 use crate::error::{Error, Result};
-use crate::model::{Direction, IndexId, LayoutStmt as Stmt, Network, Relation, TensorId};
+use crate::model::{Dim, Direction, IndexId, LayoutStmt as Stmt, Network, Relation, TensorId};
 use crate::registry;
 
 // ---- Vectors --------------------------------------------------------------
@@ -92,6 +92,51 @@ impl Mul<f64> for V3 {
     }
 }
 
+/// A rotation, as a matrix acting on column vectors.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rot(pub [[f64; 3]; 3]);
+
+impl Rot {
+    pub const IDENTITY: Rot = Rot([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+
+    /// Rotation by `rx`, `ry`, then `rz` degrees about the x, y, and z axes.
+    pub fn from_angles([rx, ry, rz]: [f64; 3]) -> Rot {
+        let (sx, cx) = rx.to_radians().sin_cos();
+        let (sy, cy) = ry.to_radians().sin_cos();
+        let (sz, cz) = rz.to_radians().sin_cos();
+        let x = Rot([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]]);
+        let y = Rot([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]]);
+        let z = Rot([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]]);
+        z.then_after(y).then_after(x)
+    }
+
+    /// `self` applied after `first`.
+    fn then_after(self, first: Rot) -> Rot {
+        let (a, b) = (self.0, first.0);
+        let mut m = [[0.0; 3]; 3];
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+            }
+        }
+        Rot(m)
+    }
+
+    pub fn apply(&self, v: V3) -> V3 {
+        let m = self.0;
+        V3::new(
+            m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
+            m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z,
+            m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z,
+        )
+    }
+
+    pub fn inverse(&self) -> Rot {
+        let m = self.0;
+        Rot([[m[0][0], m[1][0], m[2][0]], [m[0][1], m[1][1], m[2][1]], [m[0][2], m[1][2], m[2][2]]])
+    }
+}
+
 // ---- Result ---------------------------------------------------------------
 
 /// The default of the `spacing` statement.
@@ -102,6 +147,8 @@ pub struct PlacedTensor {
     pub pos: V3,
     /// Rotation about the z axis, in degrees.
     pub rotation: f64,
+    /// The full rotation of the local frame; about z alone in 2D.
+    pub orient: Rot,
 }
 
 /// One end of a bond.
@@ -168,12 +215,19 @@ pub fn layout(net: &Network) -> Result<Placement> {
         apply(net, spacing, &mut rigid, stmt)?;
     }
     let pos = place(net, spacing, &mut rigid);
+    let three = net.scene().dim == Dim::Three;
     let tensors = (0..n)
-        .map(|k| PlacedTensor {
-            pos: pos[k],
-            rotation: registry::angle(&net.tensor_style(TensorId(k)), "rotate").unwrap_or(0.0),
+        .map(|k| {
+            let angles = registry::rotation(&net.tensor_style(TensorId(k)), "rotate").unwrap_or([0.0; 3]);
+            if !three && (angles[0] != 0.0 || angles[1] != 0.0) {
+                return Err(Error::new(format!(
+                    "{}: a rotation about x or y needs a 3D scene",
+                    net.tensor(TensorId(k)).name
+                )));
+            }
+            Ok(PlacedTensor { pos: pos[k], rotation: angles[2], orient: Rot::from_angles(angles) })
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let mut out = Placement { tensors, bonds: Vec::new(), legs: Vec::new() };
     route(net, &mut out);
     Ok(out)
@@ -291,8 +345,10 @@ fn apply(net: &Network, s: f64, rigid: &mut Rigid, stmt: &Stmt) -> Result<()> {
                         .ok_or_else(|| Error::new(format!("group `{g}` is empty")))
                 })
                 .collect::<Result<_>>()?;
+            // Along -y in 2D, and along -z, between layers, in 3D.
+            let step = if net.scene().dim == Dim::Three { V3::new(0.0, 0.0, -s) } else { V3::xy(0.0, -s) };
             for w in firsts.windows(2) {
-                rigid.relate(w[0].0, w[1].0, V3::xy(0.0, -s)).map_err(|_| conflict("the stack"))?;
+                rigid.relate(w[0].0, w[1].0, step).map_err(|_| conflict("the stack"))?;
             }
         }
         Stmt::Tree { root, direction } => {
@@ -726,16 +782,18 @@ pub fn direction_vector(dir: &Direction) -> Option<V3> {
 /// The world direction of a slot's `leg-dir`, if set.
 fn slot_direction(net: &Network, out: &Placement, t: TensorId, slot: usize) -> Option<V3> {
     let local = direction_vector(&registry::direction(&net.leg_style(t, slot), "leg-dir")?)?;
-    Some(local.rotate_z(out.tensors[t.0].rotation))
+    Some(out.tensors[t.0].orient.apply(local))
 }
 
 fn route(net: &Network, out: &mut Placement) {
     // Open legs: `leg-dir`, or by prime level.
     for (id, index) in net.open_legs() {
         let (t, slot) = index.holders()[0];
+        let three = net.scene().dim == Dim::Three;
         let dir = slot_direction(net, out, t, slot).unwrap_or_else(|| {
-            let local = if index.prime == 0 { V3::xy(0.0, -1.0) } else { V3::xy(0.0, 1.0) };
-            local.rotate_z(out.tensors[t.0].rotation)
+            let sign = if index.prime == 0 { -1.0 } else { 1.0 };
+            let local = if three { V3::new(0.0, 0.0, sign) } else { V3::xy(0.0, sign) };
+            out.tensors[t.0].orient.apply(local)
         });
         out.legs.push(PlacedLeg { tensor: t, slot, index: id, dir });
     }

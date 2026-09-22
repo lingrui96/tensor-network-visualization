@@ -207,6 +207,24 @@ impl Path {
         out
     }
 
+    /// The arc length of the point of the path nearest to `p`.
+    pub fn nearest_arc(&self, p: V3) -> f64 {
+        let (mut best, mut at, mut offset) = (f64::INFINITY, 0.0, 0.0);
+        for piece in &self.pieces {
+            let len = piece.length();
+            let steps = ((len / 0.01).ceil() as usize).clamp(1, 2000);
+            for i in 0..=steps {
+                let s = len * i as f64 / steps as f64;
+                let d = (piece.at(s).0 - p).norm();
+                if d < best {
+                    (best, at) = (d, offset + s);
+                }
+            }
+            offset += len;
+        }
+        at
+    }
+
     /// The open part of the path between arc lengths `s0` and `s1`.
     pub fn slice(&self, s0: f64, s1: f64) -> Path {
         let mut pieces = Vec::new();
@@ -380,6 +398,16 @@ pub enum Cap {
 /// The outline of the points within `r` of an open centreline: its left
 /// side forward, the end cap, its right side back, and the start cap.
 /// Fillets on the inner side shrink to a point when tighter than `r`.
+/// The two sides of a tube, open paths at `r` to the left and the right of
+/// its centreline, both in the centreline's direction.
+pub fn tube_sides(center: &Path, r: f64) -> [Path; 2] {
+    let outline = tube_outline(center, r, (Cap::Flat, Cap::Flat));
+    let n = center.pieces.len();
+    let left = Path { pieces: outline.pieces[..n].to_vec(), closed: false };
+    let right = outline.pieces[n + 1..2 * n + 1].iter().rev().map(Piece::reversed).collect();
+    [left, Path { pieces: right, closed: false }]
+}
+
 pub fn tube_outline(center: &Path, r: f64, caps: (Cap, Cap)) -> Path {
     let offset = |p: &Piece, side: f64| -> Piece {
         match *p {

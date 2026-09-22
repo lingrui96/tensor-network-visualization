@@ -66,9 +66,13 @@ pub struct Scene {
     pub dim: Dim,
     /// The `spacing` statement, in layout units.
     pub spacing: Option<f64>,
-    /// An angle in 2D, or a vector in 3D.
+    /// An angle in 2D, or a vector in 3D (in view coordinates, or in the
+    /// world when `light_world`).
     pub light: Option<Vec<f64>>,
+    pub light_world: bool,
     pub camera: Option<Camera>,
+    /// `view x=…, y=…`: the world x and y axes in view coordinates.
+    pub view: Option<([f64; 3], [f64; 3])>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -148,6 +152,8 @@ pub enum Selector {
     Tag(String),
     /// A name pattern; matches groups, tensors, and indices by name.
     Name(NamePattern),
+    /// `plane`: every plane.
+    Planes,
     /// A leg of the tensors matching the pattern, such as `A[*].p`.
     LegOf(NamePattern, LegKey),
     Tensor(TensorId),
@@ -176,6 +182,24 @@ pub struct Network {
     groups: Vec<Group>,
     layout: Vec<LayoutStmt>,
     rules: Vec<Rule>,
+    planes: Vec<Plane>,
+}
+
+/// A translucent plane (docs/language.md, section 11.6).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plane {
+    pub name: String,
+    pub place: PlanePlace,
+    /// Its own attributes, which override `plane` rules.
+    pub attrs: Vec<Attr>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlanePlace {
+    /// Fitted under a group.
+    Under(String),
+    /// Centred at a point.
+    At(Vec<f64>),
 }
 
 impl Network {
@@ -476,6 +500,27 @@ impl Network {
 
     /// Merge the matching rules: by specificity (0 type, 1 tag or group,
     /// 2 name), and in source order within a specificity.
+    pub fn planes(&self) -> &[Plane] {
+        &self.planes
+    }
+
+    /// Declare a plane.  Its attributes are checked against the registry.
+    pub fn add_plane(&mut self, name: &str, place: PlanePlace, attrs: &[Attr]) -> Result<()> {
+        if self.planes.iter().any(|p| p.name == name) {
+            return Err(Error::new(format!("there are two planes named `{name}`")));
+        }
+        let attrs = registry::expand_flags(attrs)?;
+        registry::validate(&[registry::Target::Plane], &attrs)?;
+        self.planes.push(Plane { name: name.to_string(), place, attrs });
+        Ok(())
+    }
+
+    /// The attributes of a plane: `plane` rules, then its own.
+    pub fn plane_style(&self, k: usize) -> Vec<Attr> {
+        let rules = self.cascade(|sel| matches!(sel, Selector::Planes).then_some(0));
+        merge_attrs([rules.as_slice(), self.planes[k].attrs.as_slice()])
+    }
+
     fn cascade(&self, specificity: impl Fn(&Selector) -> Option<u8>) -> Vec<Attr> {
         let mut hits: Vec<(u8, &Rule)> =
             self.rules.iter().filter_map(|r| specificity(&r.selector).map(|s| (s, r))).collect();

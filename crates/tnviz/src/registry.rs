@@ -22,6 +22,8 @@ pub enum Target {
     Tensor,
     Bond,
     Leg,
+    /// A translucent plane (3D).
+    Plane,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,7 +35,6 @@ enum Kind {
     Length,
     /// A length; unitless values are em.
     EmLength,
-    Angle,
     Direction,
     Points,
     Point,
@@ -47,6 +48,8 @@ enum Kind {
     /// A backend font, such as a LaTeX font switch.
     Font,
     Word(&'static [&'static str]),
+    /// An angle, or three angles `(rx, ry, rz)` for 3D.
+    Rotation,
 }
 
 struct Spec {
@@ -64,7 +67,7 @@ const T: &[Target] = &[Tensor];
 const B: &[Target] = &[Bond];
 const L: &[Target] = &[Leg];
 const BL: &[Target] = &[Bond, Leg];
-const TBL: &[Target] = &[Tensor, Bond, Leg];
+const TP: &[Target] = &[Tensor, Plane];
 
 const SPECS: &[Spec] = &[
     // Tensors.
@@ -72,20 +75,22 @@ const SPECS: &[Spec] = &[
         key: "shape",
         targets: T,
         category: Geometry,
-        kind: Word(&["rect", "orb", "triangle", "diamond", "dot", "sphere", "box"]),
+        kind: Word(&["rect", "orb", "triangle", "diamond", "dot", "sphere", "box", "prism", "octahedron"]),
     },
-    Spec { key: "width", targets: &[Tensor, Bond, Leg], category: Geometry, kind: Length },
-    Spec { key: "height", targets: T, category: Geometry, kind: Length },
-    Spec { key: "corner-radius", targets: T, category: Geometry, kind: Length },
-    Spec { key: "rotate", targets: T, category: Layout, kind: Angle },
-    Spec { key: "color", targets: &[Tensor, Bond, Leg], category: Appearance, kind: Colour },
+    Spec { key: "width", targets: &[Tensor, Bond, Leg, Plane], category: Geometry, kind: Length },
+    Spec { key: "height", targets: TP, category: Geometry, kind: Length },
+    Spec { key: "corner-radius", targets: TP, category: Geometry, kind: Length },
+    Spec { key: "rotate", targets: TP, category: Layout, kind: Rotation },
+    Spec { key: "padding", targets: &[Plane], category: Geometry, kind: Length },
+    Spec { key: "thickness", targets: T, category: Geometry, kind: Length },
+    Spec { key: "color", targets: &[Tensor, Bond, Leg, Plane], category: Appearance, kind: Colour },
     Spec { key: "label", targets: T, category: Appearance, kind: TensorLabel },
     Spec { key: "label-padding", targets: T, category: Geometry, kind: EmLength },
     Spec { key: "highlight-size", targets: T, category: Appearance, kind: Number },
     Spec { key: "highlight-inset", targets: T, category: Appearance, kind: Length },
     Spec { key: "shadow", targets: T, category: Appearance, kind: Word(&["on", "off"]) },
-    Spec { key: "opacity", targets: TBL, category: Appearance, kind: Fraction },
-    Spec { key: "z", targets: &[Tensor, Bond], category: Order, kind: Number },
+    Spec { key: "opacity", targets: &[Tensor, Bond, Leg, Plane], category: Appearance, kind: Fraction },
+    Spec { key: "z", targets: &[Tensor, Bond, Plane], category: Order, kind: Number },
     Spec { key: "label-color", targets: &[Tensor, Bond, Leg], category: Appearance, kind: ColourOrAuto },
     Spec { key: "label-font", targets: &[Tensor, Bond, Leg], category: Appearance, kind: Font },
     // Bonds and legs.
@@ -168,6 +173,7 @@ pub(crate) fn targets(selector: &Selector) -> &'static [Target] {
         Selector::Legs | Selector::OpenLegs | Selector::LegOf(..) | Selector::Slot(..) => L,
         Selector::Tag(_) | Selector::Index(_) => BL,
         Selector::Name(_) => &[Tensor, Bond, Leg],
+        Selector::Planes => &[Plane],
     }
 }
 
@@ -177,7 +183,7 @@ pub(crate) fn validate(targets: &[Target], attrs: &[Attr]) -> Result<()> {
     for a in attrs {
         let specs: Vec<&Spec> = targets.iter().filter_map(|t| spec(&a.key, *t)).collect();
         if specs.is_empty() {
-            let known_elsewhere = [Tensor, Bond, Leg].iter().any(|t| spec(&a.key, *t).is_some());
+            let known_elsewhere = [Tensor, Bond, Leg, Plane].iter().any(|t| spec(&a.key, *t).is_some());
             return Err(Error::new(if known_elsewhere {
                 format!("`{}` does not apply here", a.key)
             } else {
@@ -194,7 +200,8 @@ pub(crate) fn validate(targets: &[Target], attrs: &[Attr]) -> Result<()> {
 
 fn check(kind: Kind, v: &Value) -> std::result::Result<(), String> {
     let ok = match (kind, v) {
-        (Number | Angle, Value::Number(_)) => true,
+        (Number | Rotation, Value::Number(_)) => true,
+        (Rotation, Value::Points(p)) => p.len() == 1 && p[0].len() == 3,
         (Fraction, Value::Number(x)) => (0.0..=1.0).contains(x),
         (Length | EmLength, Value::Number(_) | Value::Length(..)) => true,
         (Direction, Value::Number(_)) => true,
@@ -217,7 +224,7 @@ fn describe(kind: Kind) -> String {
         Number => "a number".into(),
         Fraction => "a number between 0 and 1".into(),
         Length | EmLength => "a length".into(),
-        Angle => "an angle".into(),
+        Rotation => "an angle or three angles (rx, ry, rz)".into(),
         Direction => "a direction".into(),
         Points => "points".into(),
         Point => "a point".into(),
@@ -263,9 +270,11 @@ pub(crate) fn number(attrs: &[Attr], key: &str) -> Option<f64> {
     }
 }
 
-pub(crate) fn angle(attrs: &[Attr], key: &str) -> Option<f64> {
+/// A rotation as angles about x, y, and z, in degrees; one angle is about z.
+pub(crate) fn rotation(attrs: &[Attr], key: &str) -> Option<[f64; 3]> {
     match get(attrs, key)? {
-        Value::Number(x) => Some(*x),
+        Value::Number(x) => Some([0.0, 0.0, *x]),
+        Value::Points(p) => Some([p[0][0], p[0][1], p[0][2]]),
         _ => None,
     }
 }

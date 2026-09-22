@@ -701,8 +701,8 @@ Where a default refers to `width`, it means the tube diameter, or 0 for a line.
 
 ## 11. 3D
 
-Status: specified, not implemented.  Everything in this section applies to
-`3d` scenes only; a 2D scene is unaffected by it.
+Status: implemented, 2026-09-22, with orthographic views.  Everything in
+this section applies to `3d` scenes only; a 2D scene is unaffected by it.
 
 ### 11.1 Frame and layout
 
@@ -814,13 +814,15 @@ plane W at (0, 0, -2) [width=8, height=6]     // placed explicitly
   The centres must lie in one plane; if they are on one line, the plane
   contains the line and its normal is closest to +z; for one tensor, the
   normal is +z.
-- `plane <name> at <point>` places a `width` × `height` rectangle centred at
-  the point, in its local xy plane, turned by `rotate` (section 11.1).
+- `plane <name> at <point>` places a `width` × `height` rectangle (default
+  4 × 3) centred at the point, in its local xy plane, turned by `rotate`
+  (section 11.1).
 - Its corners are rounded by `corner-radius` (default .12).
-- Planes are styled like tensors, by name or with the type selector
-  `plane`: `color` (default `black!35`), `opacity` of the sheet (default
-  .18; its edge is drawn at 2.5 times that, at most 1), `z`, and `label`
-  (none by default; drawn at a corner of the sheet).
+- A plane takes the attributes of its statement, over those of rules with
+  the type selector `plane`: `color` (default `black!35`), `opacity` of the
+  sheet (default .18; its edge is drawn at 2.5 times that, at most 1), `z`,
+  `corner-radius`, `padding` (for `under`), and `width`, `height`, and
+  `rotate` (for `at`).  Labels on planes are not specified yet.
 - **Order.**  A plane is ordered by depth like everything else, with two
   rules: the tensors of the group a plane is fitted `under` are drawn after
   it where they overlap on the page, so that they rest on it; and a line
@@ -917,7 +919,6 @@ them.  `docs/protocol.md` specifies the files and the order of runs.
   describe the current behaviour.
 - **Julia export:** not needed for now; it can be written when there is a
   use for it.
-- **3D implementation** (section 11 is specified; the engine does not
-  implement it yet).
 - **Perspective projection** and oblique projections in 3D.
-- **Planes in 2D** (a panel behind a group).
+- **Planes in 2D** (a panel behind a group), styling planes by name, and
+  labels on planes.

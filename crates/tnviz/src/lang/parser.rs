@@ -156,11 +156,32 @@ impl Parser {
                 }
                 "light" => {
                     self.advance();
+                    let world = self.eat_ident("world");
                     if self.is_sym("(") {
-                        StmtKind::Light(self.point()?)
+                        StmtKind::Light { v: self.point()?, world }
+                    } else if world {
+                        return self.fail("expected a vector after `light world`");
                     } else {
-                        StmtKind::Light(vec![self.number()?])
+                        StmtKind::Light { v: vec![self.number()?], world }
                     }
+                }
+                "view" => {
+                    self.advance();
+                    let axis = |p: &mut Self, name: &str| -> Result<Vec<f64>> {
+                        if !p.eat_ident(name) {
+                            return p.fail(&format!("expected `{name}=`"));
+                        }
+                        p.expect_sym("=")?;
+                        let v = p.point()?;
+                        if v.len() != 3 {
+                            return p.fail("a view axis has 3 components");
+                        }
+                        Ok(v)
+                    };
+                    let x = axis(self, "x")?;
+                    self.expect_sym(",")?;
+                    let y = axis(self, "y")?;
+                    StmtKind::View { x, y }
                 }
                 "camera" => {
                     self.advance();
@@ -250,6 +271,22 @@ impl Parser {
                         SelectorAst::Legs
                     };
                     StmtKind::Style { selector, attrs: self.attrs()? }
+                }
+                "plane" if matches!(self.peek_at(1), Tok::Attrs(_)) => {
+                    self.advance();
+                    StmtKind::Style { selector: SelectorAst::Planes, attrs: self.attrs()? }
+                }
+                "plane" if matches!(self.peek_at(1), Tok::Ident(_)) => {
+                    self.advance();
+                    let name = self.ident("a plane name")?;
+                    let (under, at) = if self.eat_ident("under") {
+                        (Some(self.ident("a group")?), None)
+                    } else if self.eat_ident("at") {
+                        (None, Some(self.point()?))
+                    } else {
+                        return self.fail("expected `under <group>` or `at <point>`");
+                    };
+                    StmtKind::Plane { name, under, at, attrs: self.attrs_opt()? }
                 }
                 "tag" if matches!(self.peek_at(1), Tok::Sym(":")) => {
                     self.advance();

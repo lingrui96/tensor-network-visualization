@@ -135,6 +135,10 @@ The Rust side reads and writes the tnv language described in
 - `tnviz::lighting` gives every surface its colours: mixes of base-colour
   slots, shading programs that compile to PostScript calculator functions,
   and label-colour rules (docs/lighting.md).
+- In a `3d` scene (section 11 of the language) the same stages build solids
+  (`sphere`, `box`, `prism`, `octahedron`) seen by an orthographic `view` or
+  `camera`, lines in space cut into spans ordered by depth, and translucent
+  planes; `examples/tnv/*3d.tnv` show them.
 - `tnviz::tikz` writes a figure in the runtime protocol of
   `docs/protocol.md`, and `tex/tnviz-runtime.sty` draws it in a
   `tikzpicture`.

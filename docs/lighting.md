@@ -182,12 +182,67 @@ and the backend applies it once the RGB is known (`\tnvAutoColor`).
 
 ## 6. 3D
 
-Specified with its implementation (language section 11).  The plan: the
-palette of sections 3.2 and 3.3 throughout; spheres as in section 3.3 with
-the world or view light; rounded solids drawn as their visible flat faces,
-cylindrical edges, and spherical vertices, each lit from its own normal, so
-that lit edges catch the light as the 2D rims do; tubes and cones as in
-section 4 with 3D normals; planes as a flat translucent fill and edge.
+Language section 11.  Directions below are in view coordinates: x to the
+right of the page, y up, z towards the viewer.  The light L is the scene's
+`light` vector, (−1, 1, 1) normalised by default (language section 11.8),
+and H the half vector between L and the viewer (0, 0, 1).
+
+### 6.1 Surfaces
+
+Every surface of a 3D figure is coloured from its normal n by the orb's
+tones (section 3.3), with L in place of the orb's raised light:
+
+| Term | Formula |
+|---|---|
+| light | w = clamp((n·L + .2) / 1.2) |
+| body | `.66c` at w = 0, c at w = ½, `.70c + .30` at w = 1, linear between |
+| glint | G = .85 · max(0, n·H)⁴⁰, towards `.06c + .94` |
+
+### 6.2 Spheres
+
+A sphere's normal at a page point is ((p − c)/R, √(1 − |p − c|²/R²)), and
+it adds the orb's reflected light at its silhouette on the side away from
+the light's page direction.
+
+### 6.3 Rounded solids
+
+A rounded solid (language section 11.3) is its flat faces, its cylindrical
+edges, and its spherical vertices.  The geometry stage gives the visible
+ones as patches, each with its region on the page, and the backend draws
+them in order over a flat fill of c:
+
+1. **Vertices**, from far to near: discs of radius r, lit as spheres (6.2)
+   without reflected light.  A disc is larger than the visible part of its
+   vertex, and what the edges and faces drawn later leave of it is exactly
+   that part.
+2. **Edges**, from far to near.  An edge with axis a and page direction e
+   across it has w = a × e, turned towards the viewer.  Its surface is the
+   arc of its cylinder between the normals of its two faces, cos θ e +
+   sin θ w, cut to the half facing the viewer (0 ≤ θ ≤ π).  Its region on
+   the page is exact: the band of the arc, ended by the arcs of ellipses
+   that are its end circles seen from the viewer.  At a page point at
+   distance q r across the axis, n = q e + √(1 − q²) w; on the boundaries
+   with the faces and the vertices this equals their normals, so there are
+   no seams.
+3. **Faces** that face the viewer: their polygons, lifted by r along
+   their normals, in the constant tone of their normal.
+
+Edges facing the light catch it, so rounded solids show the lit rims of
+the 2D glass faces as a consequence of their geometry.
+
+### 6.4 Tubes and cones
+
+A tube is shaded as in section 4, but across each piece of its centreline
+the normal turns from the page towards the viewer about that piece's axis
+a: at page offset q r, n = q + √(1 − |q|²) w, with w as for edges.  L is
+the scene light, not a raised page light.  A cone arrow is shaded on the
+page as in section 5.
+
+### 6.5 Planes
+
+A plane is a flat fill of its colour at its opacity (default .18), with
+its edge stroked in its colour mixed 70% with black at 2.5 times that
+opacity, at most 1.
 
 ## 7. Origin
 

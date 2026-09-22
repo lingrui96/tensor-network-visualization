@@ -253,3 +253,21 @@ fn global_variables() {
     assert!(err("let x = 1\nlet x = 2\n").contains("already declared"));
     assert!(err("A [color=@x]\nlet x = red\n").contains("unknown variable"), "declared before use");
 }
+
+#[test]
+fn scenes_in_3d_round_trip() {
+    let src = "3d\nview x=(1, -0.35, 0.3), y=(0, 0.8, 0.6)\nlight world (1, 2, 3)\ngrid T 2x2\n\
+               g: T[1..2, 1..2]\nT[*] [shape=prism, thickness=.5, rotate=(10, 20, 30)]\n\
+               plane P under g [color=cyan, padding=.5]\nplane W at (0, 0, -1) [width=5]\nplane [opacity=.3]\n";
+    let n = net(src);
+    assert_eq!(n.planes().len(), 2);
+    assert!(n.scene().light_world);
+    let printed = to_tnv(&n);
+    let again = net(&printed);
+    assert_eq!(to_tnv(&again), printed, "{printed}");
+    assert!(printed.contains("plane P under g") && printed.contains("plane [opacity=0.3]"), "{printed}");
+    // Errors.
+    assert!(parse("plane P\n").is_err());
+    assert!(parse("3d\nview x=(1, 0, 0), y=(2, 0, 0)\n").is_err());
+    assert!(parse("light world 30\n").is_err());
+}

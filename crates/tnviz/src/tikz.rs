@@ -7,7 +7,9 @@ use std::fmt::Write;
 
 use crate::geometry::{
     Anchor, ArrowGeom, Cap, Geometry, GeometryOptions, LabelOwner, LabelText, LineKind, Path, Piece,
+    tube_outline, tube_sides,
 };
+use crate::layout::V3;
 use crate::lighting::{ArrowLook, Colour, LabelColour, Lighting, LineLook, Other, Shading, Stroke};
 use crate::model::Network;
 use crate::order::{Fragment, Part};
@@ -74,6 +76,7 @@ enum Object {
     Shadow(crate::model::TensorId),
     Tensor(crate::model::TensorId),
     Line(usize),
+    Plane(usize),
 }
 
 struct Writer<'a> {
@@ -92,7 +95,9 @@ impl Writer<'_> {
         match part {
             Part::TensorShadow(t) => (Object::Shadow(t), 1.0),
             Part::Tensor(t) => tensor(t),
-            Part::Line(k) | Part::Arrow(k) => line(k),
+            Part::Line(k) | Part::Arrow(k) | Part::Span(k, _) => line(k),
+            // A plane's fill and edge have their own opacities.
+            Part::Plane(k) => (Object::Plane(k), 1.0),
             Part::Label(k) => match self.geom.labels[k].owner {
                 LabelOwner::Tensor(t) => tensor(t),
                 LabelOwner::Line(l) => line(l),
@@ -120,6 +125,9 @@ impl Writer<'_> {
                 let (geom, look) = (&self.geom.tensors[k], &self.lighting.tensors[k]);
                 let path = path_code(&geom.outline);
                 shade(s, &path, &look.face);
+                for (region, shading) in &look.patches {
+                    shade(s, &path_code(region), shading);
+                }
                 self.stroke(s, &path, &look.outline, "round");
             }
             Part::Line(k) => {
@@ -155,7 +163,67 @@ impl Writer<'_> {
                 }
                 _ => {}
             },
+            Part::Span(k, i) => self.span(s, k, i),
+            Part::Plane(k) => {
+                let (geom, look) = (&self.geom.planes[k], &self.lighting.planes[k]);
+                let path = path_code(&geom.outline);
+                let _ =
+                    writeln!(s, "\\tnvFill{{{path}}}{{{}}}{{{}}}%", colour(&look.fill), num(look.opacity));
+                let mut edge = String::new();
+                self.stroke(&mut edge, &path, &look.edge, "round");
+                let _ = write!(s, "\\tnvGroup{{{}}}{{%\n{edge}}}%\n", num(look.edge_opacity));
+            }
             Part::Label(k) => self.label(s, k),
+        }
+    }
+
+    /// One span of a 3D line: its part of the stroke, or of the tube, with
+    /// the tube's sides stroked, and its caps only at the line's own ends.
+    fn span(&self, s: &mut String, k: usize, i: usize) {
+        let line = &self.geom.lines[k];
+        let span = line.spans[i];
+        let total = line.centerline.length();
+        // A cone ends the tube at its base.
+        let (lo, hi) = match &line.arrow {
+            Some(ArrowGeom::Cone { base_at, forward: true, .. }) => (0.0, *base_at),
+            Some(ArrowGeom::Cone { base_at, forward: false, .. }) => (*base_at, total),
+            _ => (0.0, total),
+        };
+        let (from, to) = (span.from.max(lo), span.to.min(hi));
+        if to <= from + 1e-9 {
+            return;
+        }
+        let piece = line.centerline.slice(from, to);
+        match &self.lighting.lines[k] {
+            LineLook::Stroke(stroke) => self.stroke(s, &path_code(&piece), stroke, "round"),
+            LineLook::Tube { shading, outline } => {
+                let r = line.width / 2.0;
+                // Round caps only at the line's own ends, not at a cone.
+                let own =
+                    |at: f64, end: f64, kind: Cap| if (at - end).abs() < 1e-9 { kind } else { Cap::Flat };
+                let caps = (own(from, 0.0, line.caps.0), own(to, total, line.caps.1));
+                shade(s, &path_code(&tube_outline(&piece, r, caps)), shading);
+                for side in tube_sides(&piece, r) {
+                    self.stroke(s, &path_code(&side), outline, "round");
+                }
+                let arc = |p: V3, d: V3| Path {
+                    pieces: vec![Piece::Arc {
+                        center: p,
+                        radius: r,
+                        start: d.x.atan2(-d.y),
+                        sweep: -std::f64::consts::PI,
+                    }],
+                    closed: false,
+                };
+                if caps.0 == Cap::Round {
+                    let (p, d) = piece.at(0.0);
+                    self.stroke(s, &path_code(&arc(p, -d)), outline, "round");
+                }
+                if caps.1 == Cap::Round {
+                    let (p, d) = piece.at(piece.length());
+                    self.stroke(s, &path_code(&arc(p, d)), outline, "round");
+                }
+            }
         }
     }
 

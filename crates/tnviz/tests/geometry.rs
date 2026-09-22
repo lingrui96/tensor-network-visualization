@@ -174,13 +174,18 @@ fn bond_labels() {
 }
 
 #[test]
-fn unsupported_scenes() {
-    let net = parse("3d\nA\n").unwrap();
-    let lay = layout(&net).unwrap();
-    assert!(geometry(&net, &lay, &GeometryOptions::default(), &LabelSizes::new()).is_err());
-    let net = parse("A\nA [shape=box]\n").unwrap();
-    let lay = layout(&net).unwrap();
-    assert!(geometry(&net, &lay, &GeometryOptions::default(), &LabelSizes::new()).is_err());
+fn shape_names_belong_to_their_dimension() {
+    let fails = |src: &str| {
+        let net = parse(src).unwrap();
+        let lay = layout(&net).unwrap();
+        geometry(&net, &lay, &GeometryOptions::default(), &LabelSizes::new()).unwrap_err().to_string()
+    };
+    assert!(fails("A\nA [shape=box]\n").contains("3D shape, in a 2D scene"));
+    assert!(fails("3d\nA\nA [shape=rect]\n").contains("2D shape, in a 3D scene"));
+    assert!(parse("A\nA [rotate=(10, 0, 0)]\n").ok().and_then(|n| layout(&n).err()).is_some());
+    // `dot` is in both.
+    let net = parse("3d\nA\nA [shape=dot]\n").unwrap();
+    assert!(geometry(&net, &layout(&net).unwrap(), &GeometryOptions::default(), &LabelSizes::new()).is_ok());
 }
 
 #[test]

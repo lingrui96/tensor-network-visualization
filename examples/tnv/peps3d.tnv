@@ -1,0 +1,8 @@
+// A PEPS lying flat: the lattice in xy, physical legs along -z.
+3d, camera -30 35
+let fresh = lime!55!green!75!black!55!white
+grid T 3x3
+T[*]: leg
+T[*] [shape=box, color=@fresh, width=.8, height=.8, thickness=.45, label=none]
+- [tube, width=.18, color=cyan!35!blue!45!white]
+leg [tube, width=.14, color=black!22]

@@ -16,8 +16,9 @@ use expr::{
 use crate::geometry::{
     ArrowGeom, Geometry, GeometryOptions, LabelOwner, LineKind, LineStyle, Piece, Shape, TensorGeom,
 };
+use crate::geometry::{Patch, Path, View, edge_toward};
 use crate::layout::V3;
-use crate::model::Network;
+use crate::model::{Dim, Network};
 use crate::registry::{get, number, word};
 use crate::value::{Attr, Value};
 
@@ -80,6 +81,9 @@ pub struct Shadow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TensorLook {
     pub face: Shading,
+    /// In 3D: the visible surface of a rounded solid, drawn over `face` in
+    /// order, each shading clipped to its region.
+    pub patches: Vec<(Path, Shading)>,
     pub outline: Stroke,
     pub shadow: Option<Shadow>,
     /// The tensor's opacity, for its body, outline, and label together.
@@ -107,6 +111,15 @@ pub enum LabelColour {
     },
 }
 
+/// A plane (language section 11.6): a flat translucent fill and its edge.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaneLook {
+    pub fill: Colour,
+    pub opacity: f64,
+    pub edge: Stroke,
+    pub edge_opacity: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ArrowLook {
     Fill(Colour),
@@ -130,6 +143,8 @@ pub struct Lighting {
     /// Each line's opacity, for the line, its arrow, and its label
     /// together; indexed like `Geometry::lines`.
     pub line_opacity: Vec<f64>,
+    /// Indexed like `Geometry::planes`.
+    pub planes: Vec<PlaneLook>,
     /// Indexed like `Geometry::labels`.
     pub labels: Vec<LabelColour>,
 }
@@ -143,6 +158,8 @@ const DEFAULT_LIGHT: f64 = 135.0;
 const TENSOR_COLOUR: &str = "black!48";
 const LINE_COLOUR: &str = "black!72";
 const TUBE_COLOUR: &str = "black!42";
+const PLANE_COLOUR: &str = "black!35";
+const PLANE_OPACITY: f64 = 0.18;
 const SHADOW_OFFSET: f64 = 0.1;
 const SHADOW_OPACITY: f64 = 0.12;
 const TENSOR_OUTLINE_EM: f64 = 0.055;
@@ -206,7 +223,14 @@ impl Slots {
 /// Light the geometry of a network.
 pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Lighting {
     let em = opts.em_pt / opts.unit_pt;
-    let light = net.scene().light.as_ref().and_then(|v| v.first().copied()).unwrap_or(DEFAULT_LIGHT);
+    let three = net.scene().dim == Dim::Three;
+    let light3 = light_vector(net);
+    // In 3D the page angle of the light, for shadows, comes from its vector.
+    let light = if three {
+        light3.y.atan2(light3.x).to_degrees()
+    } else {
+        net.scene().light.as_ref().and_then(|v| v.first().copied()).unwrap_or(DEFAULT_LIGHT)
+    };
     let mut slots = Slots(Vec::new());
 
     let mut tensor_slots = Vec::new();
@@ -219,9 +243,16 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
             tensor_slots.push(slot);
             let hl = number(&attrs, "highlight-size").unwrap_or(0.66) / 0.22;
             let inset = length(&attrs, "highlight-inset").unwrap_or(0.0);
-            let face = match t.shape {
-                Shape::Orb | Shape::Dot => orb(t, slot, light),
-                _ => glass_face(t, slot, light, hl, inset),
+            let (face, patches) = match (t.shape, t.patches.as_slice()) {
+                (_, [Patch::Sphere { center, radius }]) if three => {
+                    (sphere3(*center, *radius, slot, light3, true, &t.outline), Vec::new())
+                }
+                (_, patches) if three => (
+                    flat(slot, &t.outline),
+                    patches.iter().map(|p| (p.region(), patch_shading(p, slot, light3))).collect(),
+                ),
+                (Shape::Orb | Shape::Dot, _) => (orb(t, slot, light), Vec::new()),
+                _ => (glass_face(t, slot, light, hl, inset), Vec::new()),
             };
             let opacity = number(&attrs, "opacity").unwrap_or(1.0);
             // A shadow is one fill: it fades by the same factor directly.
@@ -232,6 +263,7 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
             });
             TensorLook {
                 face,
+                patches,
                 outline: Stroke {
                     colour: Colour::mix(slot, 0.76, Other::Black),
                     width: TENSOR_OUTLINE_EM * em,
@@ -253,13 +285,18 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
             line_slots.push(slot);
             match (&l.outline, tube) {
                 (Some(outline), true) => LineLook::Tube {
-                    shading: tube_shading(
-                        &l.centerline.pieces,
-                        outline.sample(0.2),
-                        l.width / 2.0,
-                        slot,
-                        light,
-                    ),
+                    shading: if three {
+                        tube_shading3(
+                            &l.centerline.pieces,
+                            &l.axes,
+                            outline.sample(0.2),
+                            l.width / 2.0,
+                            slot,
+                            light3,
+                        )
+                    } else {
+                        tube_shading(&l.centerline.pieces, outline.sample(0.2), l.width / 2.0, slot, light)
+                    },
                     outline: Stroke {
                         colour: Colour::mix(slot, 0.62, Other::Black),
                         width: TUBE_OUTLINE_EM * em,
@@ -330,7 +367,20 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
         .iter()
         .map(|l| number(&line_attrs(net, l.kind, l.index), "opacity").unwrap_or(1.0))
         .collect();
-    Lighting { slots: slots.0, tensors, lines, arrows, line_opacity, labels }
+    let planes = (0..geom.planes.len())
+        .map(|k| {
+            let attrs = net.plane_style(k);
+            let slot = slots.colour_attr(&attrs, "color", PLANE_COLOUR);
+            let opacity = number(&attrs, "opacity").unwrap_or(PLANE_OPACITY);
+            PlaneLook {
+                fill: Colour::base(slot),
+                opacity,
+                edge: Stroke { colour: Colour::mix(slot, 0.7, Other::Black), width: TUBE_OUTLINE_EM * em },
+                edge_opacity: (2.5 * opacity).min(1.0),
+            }
+        })
+        .collect();
+    Lighting { slots: slots.0, tensors, lines, arrows, line_opacity, planes, labels }
 }
 
 fn line_attrs(net: &Network, kind: LineKind, index: crate::model::IndexId) -> Vec<Attr> {
@@ -526,6 +576,198 @@ fn orb(t: &TensorGeom, slot: usize, light: f64) -> Shading {
     Shading { center, extent, program: p }
 }
 
+// ---- 3D ----------------------------------------------------------------------
+
+/// The 3D light in view coordinates (language section 11.8), unit length.
+fn light_vector(net: &Network) -> V3 {
+    let scene = net.scene();
+    let v = match scene.light.as_deref() {
+        Some([x, y, z]) => V3::new(*x, *y, *z),
+        _ => V3::new(-1.0, 1.0, 1.0),
+    };
+    let v = if scene.light_world { View::from_scene(scene).apply(v) } else { v };
+    v.unit().unwrap_or(V3::new(-1.0, 1.0, 1.0).unit().unwrap())
+}
+
+/// The tones of a lit surface with normal (nx, ny, nz) in view coordinates:
+/// the palette of the orb (section 3.3 of docs/lighting.md), without the
+/// reflected light.  Returns the weights to the base and lit tones and the
+/// glint.
+fn surface_terms(p: &mut Program, n: [Expr; 3], l: V3) -> (Expr, Expr, Expr) {
+    let h = V3::new(l.x, l.y, l.z + 1.0).unit().unwrap();
+    let [nx, ny, nz] = n;
+    let dot = |v: V3| add(add(mul(nx.clone(), c(v.x)), mul(ny.clone(), c(v.y))), mul(nz.clone(), c(v.z)));
+    let w = p.bind(clamp01(div(add(dot(l), c(ORB_WRAP)), c(1.0 + ORB_WRAP))));
+    let to_base = p.bind(clamp01(mul(c(2.0), w.clone())));
+    let to_lit = p.bind(clamp01(sub(mul(c(2.0), w), c(1.0))));
+    let glint = p.bind(mul(c(ORB_GLINT_PEAK), pow(max(c(0.0), dot(h)), c(ORB_SHININESS))));
+    (to_base, to_lit, glint)
+}
+
+/// The channels of a surface from its terms, and reflected light towards
+/// the base colour.
+fn surface_colour(
+    slot: usize,
+    (to_base, to_lit, glint): &(Expr, Expr, Expr),
+    bounce: Option<&Expr>,
+) -> [Expr; 3] {
+    let channel = |ch: u8| {
+        let core = mixed(slot, ch, ORB_CORE, false);
+        let base = param(slot, ch);
+        let lit = mixed(slot, ch, ORB_LIT, true);
+        let body = add(
+            add(core.clone(), mul(sub(base.clone(), core), to_base.clone())),
+            mul(sub(lit, base.clone()), to_lit.clone()),
+        );
+        let body = match bounce {
+            Some(b) => add(mul(body, sub(c(1.0), b.clone())), mul(base, b.clone())),
+            None => body,
+        };
+        add(mul(body, sub(c(1.0), glint.clone())), mul(mixed(slot, ch, 0.06, true), glint.clone()))
+    };
+    [channel(0), channel(1), channel(2)]
+}
+
+fn shading_over(p: Program, region: &Path) -> Shading {
+    let (center, extent) = domain(&region.sample(0.02));
+    Shading { center, extent, program: p }
+}
+
+/// A sphere of `radius` about the page point `center`; `bounce` adds the
+/// reflected light at its silhouette, for whole spheres.
+fn sphere3(center: V3, radius: f64, slot: usize, l: V3, bounce: bool, region: &Path) -> Shading {
+    let mut p = Program::new();
+    let nx = p.bind(div(sub(Expr::X, c(center.x)), c(radius)));
+    let ny = p.bind(div(sub(Expr::Y, c(center.y)), c(radius)));
+    let r2 = p.bind(add(mul(nx.clone(), nx.clone()), mul(ny.clone(), ny.clone())));
+    let nz = p.bind(sqrt(max(c(0.0), sub(c(1.0), r2))));
+    let terms = surface_terms(&mut p, [nx.clone(), ny.clone(), nz.clone()], l);
+    let reflected = bounce.then(|| {
+        let flat = V3::xy(l.x, l.y).unit().unwrap_or(V3::xy(-1.0, 1.0).unit().unwrap());
+        let away = p.bind(max(c(0.0), neg(add(mul(nx, c(flat.x)), mul(ny, c(flat.y))))));
+        let tr = p.bind(clamp01(sub(c(1.0), div(nz, c(ORB_BOUNCE)))));
+        p.bind(mul(c(ORB_BOUNCE_PEAK), mul(smooth(tr), away)))
+    });
+    p.output(surface_colour(slot, &terms, reflected.as_ref()));
+    shading_over(p, region)
+}
+
+/// A flat fill of the base colour, under a solid's patches.
+fn flat(slot: usize, region: &Path) -> Shading {
+    let mut p = Program::new();
+    p.output([param(slot, 0), param(slot, 1), param(slot, 2)]);
+    shading_over(p, region)
+}
+
+/// The shading of one patch of a rounded solid.
+fn patch_shading(patch: &Patch, slot: usize, l: V3) -> Shading {
+    let region = patch.region();
+    match patch {
+        Patch::Sphere { center, radius } => sphere3(*center, *radius, slot, l, false, &region),
+        Patch::Edge { a, axis, radius, b, .. } => {
+            // Across the cylinder: e on the page, and w towards the viewer.
+            let d = (*b - *a).unit().unwrap();
+            let e = V3::xy(-d.y, d.x);
+            let w = edge_toward(*axis, e);
+            let mut p = Program::new();
+            let q = p.bind(max(
+                c(-1.0),
+                min(
+                    c(1.0),
+                    div(
+                        add(mul(sub(Expr::X, c(a.x)), c(e.x)), mul(sub(Expr::Y, c(a.y)), c(e.y))),
+                        c(*radius),
+                    ),
+                ),
+            ));
+            let s = p.bind(sqrt(max(c(0.0), sub(c(1.0), mul(q.clone(), q.clone())))));
+            let n = [
+                add(mul(q.clone(), c(e.x)), mul(s.clone(), c(w.x))),
+                add(mul(q.clone(), c(e.y)), mul(s.clone(), c(w.y))),
+                mul(s, c(w.z)),
+            ];
+            let n = [p.bind(n[0].clone()), p.bind(n[1].clone()), p.bind(n[2].clone())];
+            let terms = surface_terms(&mut p, n, l);
+            p.output(surface_colour(slot, &terms, None));
+            shading_over(p, &region)
+        }
+        Patch::Face { normal, .. } => {
+            let mut p = Program::new();
+            let terms = surface_terms(&mut p, [c(normal.x), c(normal.y), c(normal.z)], l);
+            p.output(surface_colour(slot, &terms, None));
+            shading_over(p, &region)
+        }
+    }
+}
+
+/// A tube in 3D: as `tube_shading`, but across each piece the normal turns
+/// from the page towards the viewer about that piece's 3D axis.
+fn tube_shading3(
+    pieces: &[Piece],
+    axes: &[V3],
+    outline: Vec<V3>,
+    radius: f64,
+    slot: usize,
+    l: V3,
+) -> Shading {
+    let (x, y) = (Expr::X, Expr::Y);
+    let mut p = Program::new();
+    let (mut bx, mut by, mut bd) = (c(0.0), c(0.0), c(FAR));
+    let (mut wx, mut wy, mut wz) = (c(0.0), c(0.0), c(1.0));
+    for (piece, axis) in pieces.iter().zip(axes) {
+        let Piece::Line { a, b } = *piece else { continue };
+        let len = (b - a).norm();
+        let e = (b - a).unit().unwrap_or(V3::xy(1.0, 0.0));
+        let across = V3::xy(-e.y, e.x);
+        let mut w = V3::new(
+            axis.y * across.z - axis.z * across.y,
+            axis.z * across.x - axis.x * across.z,
+            axis.x * across.y - axis.y * across.x,
+        )
+        .unit()
+        .unwrap_or(V3::new(0.0, 0.0, 1.0));
+        if w.z < 0.0 {
+            w = -w;
+        }
+        let t = p.bind(min(
+            max(add(mul(sub(x.clone(), c(a.x)), c(e.x)), mul(sub(y.clone(), c(a.y)), c(e.y))), c(0.0)),
+            c(len),
+        ));
+        let dx = p.bind(sub(x.clone(), add(c(a.x), mul(t.clone(), c(e.x)))));
+        let dy = p.bind(sub(y.clone(), add(c(a.y), mul(t, c(e.y)))));
+        let d2 = p.bind(add(mul(dx.clone(), dx.clone()), mul(dy.clone(), dy.clone())));
+        let closer = p.bind(lt(d2.clone(), bd.clone()));
+        bx = p.bind(if_(closer.clone(), dx, bx));
+        by = p.bind(if_(closer.clone(), dy, by));
+        wx = p.bind(if_(closer.clone(), c(w.x), wx));
+        wy = p.bind(if_(closer.clone(), c(w.y), wy));
+        wz = p.bind(if_(closer, c(w.z), wz));
+        bd = p.bind(min(d2, bd));
+    }
+    let qx = p.bind(div(bx, c(radius)));
+    let qy = p.bind(div(by, c(radius)));
+    let s =
+        p.bind(sqrt(max(c(0.0), sub(c(1.0), add(mul(qx.clone(), qx.clone()), mul(qy.clone(), qy.clone()))))));
+    let n = [p.bind(add(qx, mul(s.clone(), wx))), p.bind(add(qy, mul(s.clone(), wy))), p.bind(mul(s, wz))];
+    let h = V3::new(l.x, l.y, l.z + 1.0).unit().unwrap();
+    let dot =
+        |v: V3| add(add(mul(n[0].clone(), c(v.x)), mul(n[1].clone(), c(v.y))), mul(n[2].clone(), c(v.z)));
+    let diffuse = p.bind(max(c(0.0), dot(l)));
+    let spec = p.bind(pow(max(c(0.0), dot(h)), c(TUBE_SHININESS)));
+    let channel = |ch: u8| {
+        min(
+            c(1.0),
+            add(
+                mul(param(slot, ch), add(c(TUBE_AMBIENT), mul(c(TUBE_DIFFUSE), diffuse.clone()))),
+                mul(c(TUBE_SPECULAR), spec.clone()),
+            ),
+        )
+    };
+    p.output([channel(0), channel(1), channel(2)]);
+    let (center, extent) = domain(&outline);
+    Shading { center, extent, program: p }
+}
+
 // ---- Tubes -----------------------------------------------------------------
 
 /// A tube: every point takes the surface normal of a half-cylinder about the
@@ -641,7 +883,6 @@ fn cone_shading(cone: &ArrowGeom, slot: usize, light: f64) -> Shading {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Path;
     use crate::{LabelSizes, geometry, layout, parse};
 
     fn lit(src: &str) -> (Geometry, Lighting) {
@@ -743,6 +984,9 @@ mod tests {
             include_str!("../../../../examples/tnv/routes.tnv"),
             include_str!("../../../../examples/tnv/sandwich.tnv"),
             include_str!("../../../../examples/tnv/ttn.tnv"),
+            include_str!("../../../../examples/tnv/solids3d.tnv"),
+            include_str!("../../../../examples/tnv/peps3d.tnv"),
+            include_str!("../../../../examples/tnv/layers3d.tnv"),
         ] {
             let (g, l) = lit(src);
             compiled_match(&g, &l);
@@ -754,6 +998,9 @@ mod tests {
     fn compiled_match(g: &Geometry, l: &Lighting) {
         let mut shadings: Vec<(&Shading, &Path)> =
             l.tensors.iter().zip(&g.tensors).map(|(look, t)| (&look.face, &t.outline)).collect();
+        for look in &l.tensors {
+            shadings.extend(look.patches.iter().map(|(region, shading)| (shading, region)));
+        }
         for (look, line) in l.lines.iter().zip(&g.lines) {
             if let (LineLook::Tube { shading, .. }, Some(outline)) = (look, &line.outline) {
                 shadings.push((shading, outline));
@@ -778,7 +1025,9 @@ mod tests {
                     let stack = expr::ps::eval(&code, x, y);
                     for ch in 0..3 {
                         assert!(
-                            (direct[ch] - stack[ch]).abs() < 1e-4,
+                            // Constants have 6 decimals; high powers (glints, ^40) scale
+                            // their rounding.  5e-4 is an eighth of a colour step.
+                            (direct[ch] - stack[ch]).abs() < 5e-4,
                             "({x}, {y}): {} vs {}",
                             direct[ch],
                             stack[ch]

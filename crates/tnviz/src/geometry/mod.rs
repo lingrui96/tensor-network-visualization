@@ -7,18 +7,22 @@
 
 mod path;
 mod shape;
+mod solid;
+mod space;
 
 use std::collections::{BTreeMap, HashMap};
 
-pub use path::{Cap, Path, Piece};
+pub use path::{Cap, Path, Piece, tube_sides};
 pub use shape::Shape;
+pub use solid::{Patch, View, edge_toward};
 
 use crate::error::{Error, Result};
 use crate::layout::{Placement, Route, V3};
 use crate::model::{Dim, IndexId, Network, TensorId, index_display};
 use crate::registry::{self, get, number, word};
 use crate::value::{Attr, Value};
-use path::{Filleted, Vertex, fillet_open, tube_outline};
+pub(crate) use path::tube_outline;
+use path::{Filleted, Vertex, fillet_open};
 
 /// Sizes that geometry needs from the outer layer.
 #[derive(Clone, Debug)]
@@ -67,6 +71,12 @@ pub struct TensorGeom {
     pub corner_radius: f64,
     /// The silhouette, in page coordinates.
     pub outline: Path,
+    /// In 3D: the depth of the centre (larger is nearer), and the visible
+    /// surface in drawing order.  0 and empty in 2D.
+    pub depth: f64,
+    pub patches: Vec<Patch>,
+    /// In 3D, its layer among the planes (section 11.7); 0 in 2D.
+    pub layer: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +108,22 @@ pub struct LineGeom {
     pub visible: (f64, f64),
     /// The arrow (section 8.11).
     pub arrow: Option<ArrowGeom>,
+    /// In 3D: the direction in view coordinates of each piece of the
+    /// centreline, and the spans the line is drawn in, each at one depth
+    /// (section 11.7).  Empty in 2D.
+    pub axes: Vec<V3>,
+    pub spans: Vec<Span>,
+}
+
+/// A part of a line, by arc length, drawn at one depth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Span {
+    pub from: f64,
+    pub to: f64,
+    /// Larger is nearer.
+    pub depth: f64,
+    /// Its layer among the planes (section 11.7).
+    pub layer: u32,
 }
 
 /// An arrow on or beside a line (section 8.11).
@@ -181,7 +207,19 @@ pub struct Geometry {
     pub lines: Vec<LineGeom>,
     pub labels: Vec<LabelGeom>,
     pub crossings: Vec<Crossing>,
+    /// In 3D, the planes of section 11.6, indexed like `Network::planes`.
+    pub planes: Vec<PlaneGeom>,
     pub warnings: Vec<String>,
+}
+
+/// A plane on the page.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaneGeom {
+    pub outline: Path,
+    /// The depth of its centre (larger is nearer).
+    pub depth: f64,
+    /// Its place among the layers the planes cut space into (section 11.7).
+    pub layer: u32,
 }
 
 /// Build the geometry of a placed network.
@@ -191,10 +229,13 @@ pub fn geometry(
     opts: &GeometryOptions,
     sizes: &LabelSizes,
 ) -> Result<Geometry> {
-    if net.scene().dim == Dim::Three {
-        return Err(Error::new("geometry is specified for 2D scenes only"));
-    }
     let mut g = Builder { net, lay, opts, sizes, warnings: Vec::new() };
+    if net.scene().dim == Dim::Three {
+        return g.space();
+    }
+    if let Some(p) = net.planes().first() {
+        return Err(Error::new(format!("plane {}: planes need a 3D scene", p.name)));
+    }
     let (tensors, mut labels) = g.tensors()?;
     let mut lines = Vec::new();
     let mut bonds = Vec::new();
@@ -232,7 +273,7 @@ pub fn geometry(
             line.outline = Some(tube_outline(&line.centerline.slice(s0, s1), line.width / 2.0, caps));
         }
     }
-    Ok(Geometry { tensors, lines, labels, crossings, warnings: g.warnings })
+    Ok(Geometry { tensors, lines, labels, crossings, planes: Vec::new(), warnings: g.warnings })
 }
 
 /// A hop to insert on a polyline segment.
@@ -401,7 +442,7 @@ impl Builder<'_> {
         for (id, t) in self.net.tensors() {
             let style = self.net.tensor_style(id);
             let shape_word = word(&style, "shape").unwrap_or("rect");
-            let shape = Shape::from_word(shape_word).ok_or_else(|| {
+            let shape = Shape::from_word(shape_word).filter(|s| s.is_2d()).ok_or_else(|| {
                 Error::new(format!("{}: `{shape_word}` is a 3D shape, in a 2D scene", t.name))
             })?;
             // The label: the name unless `none`, or a dot.
@@ -443,6 +484,9 @@ impl Builder<'_> {
                 height: h,
                 corner_radius: used,
                 outline: local.transformed(placed.rotation, placed.pos),
+                depth: 0.0,
+                patches: Vec::new(),
+                layer: 0,
             });
             if let Some(((size, measured), text)) = label {
                 labels.push(LabelGeom {
@@ -530,6 +574,8 @@ impl Builder<'_> {
                 caps,
                 visible: (0.0, 0.0),
                 arrow: None,
+                axes: Vec::new(),
+                spans: Vec::new(),
             },
             vertices,
             filleted,
@@ -617,6 +663,8 @@ impl Builder<'_> {
             caps,
             visible: (0.0, 0.0),
             arrow: None,
+            axes: Vec::new(),
+            spans: Vec::new(),
         }
     }
 

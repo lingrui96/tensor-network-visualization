@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use super::ast::*;
 use crate::error::{Error, Pos, Result};
-use crate::model::{IndexId, LayoutStmt, LegKey, Network, Selector, TensorId};
+use crate::model::{IndexId, LayoutStmt, LegKey, Network, PlanePlace, Selector, TensorId};
 use crate::name::{Name, NamePattern, SubPattern};
 use crate::value::{Attr, Value};
 
@@ -259,7 +259,31 @@ fn statement(net: &mut Network, auto: &mut Auto, stmt: &Stmt) -> Result<()> {
             }
             net.scene_mut().spacing = Some(*d);
         }
-        StmtKind::Light(v) => net.scene_mut().light = Some(v.clone()),
+        StmtKind::Light { v, world } => {
+            if *world && v.len() != 3 {
+                return Err(Error::at(pos, "`light world` needs a 3D vector"));
+            }
+            net.scene_mut().light = Some(v.clone());
+            net.scene_mut().light_world = *world;
+        }
+        StmtKind::Plane { name, under, at, attrs } => {
+            let place = match (under, at) {
+                (Some(g), _) => PlanePlace::Under(g.clone()),
+                (None, Some(p)) => PlanePlace::At(p.clone()),
+                (None, None) => unreachable!("the parser requires a placement"),
+            };
+            net.add_plane(name, place, attrs).map_err(|e| e.or_at(pos))?;
+        }
+        StmtKind::View { x, y } => {
+            let v = |a: &[f64]| [a[0], a[1], a[2]];
+            let (x, y) = (v(x), v(y));
+            let norm = |a: [f64; 3]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+            let cross = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+            if norm(x) < 1e-9 || norm(cross) < 1e-9 * norm(x) * norm(y).max(1e-9) {
+                return Err(Error::at(pos, "the view axes must be non-zero and not parallel"));
+            }
+            net.scene_mut().view = Some((x, y));
+        }
         StmtKind::Camera { angles, attrs } => {
             let cam = net.scene_mut().camera.get_or_insert_with(Default::default);
             if angles.is_some() {
@@ -383,6 +407,7 @@ fn statement(net: &mut Network, auto: &mut Auto, stmt: &Stmt) -> Result<()> {
                 SelectorAst::Bonds => Selector::Bonds,
                 SelectorAst::Legs => Selector::Legs,
                 SelectorAst::OpenLegs => Selector::OpenLegs,
+                SelectorAst::Planes => Selector::Planes,
                 SelectorAst::Tag(t) => Selector::Tag(t.clone()),
                 SelectorAst::Name(n) => Selector::Name(pattern(n, &env)?),
                 SelectorAst::LegOf(n, leg) => Selector::LegOf(

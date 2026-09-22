@@ -3,7 +3,8 @@
 
 use std::cmp::Ordering;
 
-use crate::geometry::{Geometry, LabelOwner, LineKind};
+use crate::geometry::{ArrowGeom, Geometry, LabelOwner, LineKind};
+use crate::layout::V3;
 use crate::model::{Network, TensorId};
 use crate::registry::{number, word};
 
@@ -16,6 +17,10 @@ pub enum Part {
     Line(usize),
     /// A line's arrowhead, drawn right after the line.
     Arrow(usize),
+    /// In 3D, one span of a line (`Geometry::lines[k].spans[i]`).
+    Span(usize, usize),
+    /// In 3D, a plane.
+    Plane(usize),
     /// A label, by its position in `Geometry::labels`.
     Label(usize),
 }
@@ -40,6 +45,8 @@ pub enum Class {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Key {
     pub pass: Pass,
+    /// In 3D, the layer among the planes (language section 11.7); 0 in 2D.
+    pub layer: u32,
     pub depth: f64,
     pub class: Class,
     pub z: f64,
@@ -51,6 +58,7 @@ impl Key {
     fn cmp(&self, other: &Key) -> Ordering {
         self.pass
             .cmp(&other.pass)
+            .then(self.layer.cmp(&other.layer))
             .then(other.depth.total_cmp(&self.depth))
             .then(self.class.cmp(&other.class))
             .then(self.z.total_cmp(&other.z))
@@ -67,8 +75,13 @@ pub struct Fragment {
 /// The fragments of a figure in drawing order.  In 2D every depth is 0.
 pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
     let mut out = Vec::new();
-    let key = |pass, class, z, order| Key { pass, depth: 0.0, class, z, order };
+    // Depth keys are distances: far is larger, and drawn first.
+    let key = |pass, class, z, order| Key { pass, layer: 0, depth: 0.0, class, z, order };
+    // `0.0 - depth`, not `-depth`: 2D depths stay +0, as the others.
+    let at_depth = |k: Key, depth: f64| Key { depth: 0.0 - depth, ..k };
     for t in &geom.tensors {
+        let key =
+            |pass, class, z, order| Key { layer: t.layer, ..at_depth(key(pass, class, z, order), t.depth) };
         let attrs = net.tensor_style(t.tensor);
         let z = number(&attrs, "z").unwrap_or(0.0);
         let order = t.tensor.0 as f64;
@@ -92,10 +105,32 @@ pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
         let class = if word(&attrs, "layer") == Some("front") { Class::Front } else { Class::Bonds };
         key(Pass::Scene, class, number(&attrs, "z").unwrap_or(0.0), l.index.0 as f64)
     };
+    // In 3D, the key of the span of line `k` at a point of the page.
+    let span_key = |k: usize, p: V3| {
+        let line = &geom.lines[k];
+        let s = line.centerline.nearest_arc(p);
+        let span = line.spans.iter().find(|sp| s <= sp.to + 1e-9).or(line.spans.last()).unwrap();
+        Key { layer: span.layer, ..at_depth(line_key(k), span.depth) }
+    };
+    for (k, plane) in geom.planes.iter().enumerate() {
+        let z = number(&net.plane_style(k), "z").unwrap_or(0.0);
+        let key = Key {
+            layer: plane.layer,
+            ..at_depth(key(Pass::Scene, Class::Tensors, z, k as f64), plane.depth)
+        };
+        out.push(Fragment { key, part: Part::Plane(k) });
+    }
     for (k, line) in geom.lines.iter().enumerate() {
-        out.push(Fragment { key: line_key(k), part: Part::Line(k) });
-        if line.arrow.is_some() {
-            let key = line_key(k);
+        if line.spans.is_empty() {
+            out.push(Fragment { key: line_key(k), part: Part::Line(k) });
+        } else {
+            for (i, span) in line.spans.iter().enumerate() {
+                let key = Key { layer: span.layer, ..at_depth(line_key(k), span.depth) };
+                out.push(Fragment { key, part: Part::Span(k, i) });
+            }
+        }
+        if let Some(arrow) = &line.arrow {
+            let key = if line.spans.is_empty() { line_key(k) } else { span_key(k, arrow_middle(arrow)) };
             out.push(Fragment { key: Key { order: key.order + 0.25, ..key }, part: Part::Arrow(k) });
         }
     }
@@ -106,9 +141,9 @@ pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
                 let body = out.iter().find(|f| f.part == Part::Tensor(t)).unwrap().key;
                 Key { order: body.order + 0.5, ..body }
             }
-            // Printed on a line: ordered with the line.
+            // Printed on a line: ordered with the line, or its span.
             LabelOwner::Line(l) if label.on_line => {
-                let line = line_key(l);
+                let line = if geom.lines[l].spans.is_empty() { line_key(l) } else { span_key(l, label.pos) };
                 Key { order: line.order + 0.5, ..line }
             }
             // Beside a line: above the whole scene.
@@ -118,6 +153,13 @@ pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
     }
     out.sort_by(|a, b| a.key.cmp(&b.key));
     out
+}
+
+/// The middle of an arrow on the page.
+fn arrow_middle(arrow: &ArrowGeom) -> V3 {
+    let (ArrowGeom::Flat { shape: path, .. } | ArrowGeom::Cone { outline: path, .. }) = arrow;
+    let pts = path.sample(0.05);
+    pts.iter().fold(V3::ZERO, |a, p| a + *p) * (1.0 / pts.len().max(1) as f64)
 }
 
 #[cfg(test)]

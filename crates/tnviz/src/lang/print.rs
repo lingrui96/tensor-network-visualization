@@ -5,7 +5,9 @@
 use std::fmt::Write;
 
 use super::lower::VERSION;
-use crate::model::{Dim, Direction, LayoutStmt, LegKey, Network, Relation, Selector, index_display};
+use crate::model::{
+    Dim, Direction, LayoutStmt, LegKey, Network, PlanePlace, Relation, Selector, index_display,
+};
 use crate::value::{format_number, write_attrs, write_point};
 
 pub fn to_tnv(net: &Network) -> String {
@@ -24,11 +26,18 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
     if let Some(d) = scene.spacing {
         writeln!(o, "spacing {}", format_number(d))?;
     }
+    if let Some((x, y)) = &scene.view {
+        o.push_str("view x=");
+        write_point(o, x)?;
+        o.push_str(", y=");
+        write_point(o, y)?;
+        o.push('\n');
+    }
     if let Some(light) = &scene.light {
         match light.as_slice() {
             [angle] => writeln!(o, "light {}", format_number(*angle))?,
             v => {
-                o.push_str("light ");
+                o.push_str(if scene.light_world { "light world " } else { "light " });
                 write_point(o, v)?;
                 o.push('\n');
             }
@@ -126,6 +135,25 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
         o.push('\n');
     }
 
+    if !net.planes().is_empty() {
+        o.push('\n');
+    }
+    for p in net.planes() {
+        write!(o, "plane {} ", p.name)?;
+        match &p.place {
+            PlanePlace::Under(g) => write!(o, "under {g}")?,
+            PlanePlace::At(at) => {
+                o.push_str("at ");
+                write_point(o, at)?;
+            }
+        }
+        if !p.attrs.is_empty() {
+            o.push(' ');
+            write_attrs(o, &p.attrs)?;
+        }
+        o.push('\n');
+    }
+
     if !net.rules().is_empty() {
         o.push('\n');
     }
@@ -135,6 +163,7 @@ fn write_network(o: &mut String, net: &Network) -> std::fmt::Result {
             Selector::Bonds => o.push('-'),
             Selector::Legs => o.push_str("leg"),
             Selector::OpenLegs => o.push_str("leg.open"),
+            Selector::Planes => o.push_str("plane"),
             Selector::Tag(t) => write!(o, "tag:{t}")?,
             Selector::Name(p) => write!(o, "{p}")?,
             Selector::LegOf(p, key) => {

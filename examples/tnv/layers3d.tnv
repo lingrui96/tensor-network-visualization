@@ -1,0 +1,14 @@
+// Two layers on translucent planes, joined through them.
+3d, camera -30 30
+let fresh = lime!55!green!75!black!55!white
+grid A 2x3
+grid B 2x3
+ket: A[1..2, 1..3]
+bra: B[1..2, 1..3]
+stack bra, ket
+A[1..2, 1..3] - B[1..2, 1..3]
+A[*] [shape=sphere, color=@fresh]
+B[*] [shape=sphere, color=orange!55!white]
+- [tube, width=.16, color=cyan!35!blue!45!white]
+plane Lb under bra [color=orange!60]
+plane Lk under ket [color=lime!60!green]

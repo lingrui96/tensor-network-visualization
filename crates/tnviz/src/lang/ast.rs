@@ -64,6 +64,7 @@ pub enum SelectorAst {
     Bonds,
     Legs,
     OpenLegs,
+    Planes,
     Tag(String),
     Name(NameAst),
     LegOf(NameAst, LegRef),
@@ -74,7 +75,21 @@ pub enum StmtKind {
     Version(String),
     Scene(Dim),
     Spacing(f64),
-    Light(Vec<f64>),
+    Light {
+        v: Vec<f64>,
+        world: bool,
+    },
+    View {
+        x: Vec<f64>,
+        y: Vec<f64>,
+    },
+    /// `plane P under g [...]` or `plane P at (x, y, z) [...]`.
+    Plane {
+        name: String,
+        under: Option<String>,
+        at: Option<Vec<f64>>,
+        attrs: Vec<Attr>,
+    },
     Camera {
         angles: Option<(f64, f64)>,
         attrs: Vec<Attr>,

@@ -1,0 +1,8 @@
+// The 3D solids, from the default camera.
+3d
+let fresh = lime!55!green!75!black!55!white
+S at (0, 0); B at (2.2, 0); P at (4.4, 0); O at (6.6, 0)
+S [shape=sphere, color=@fresh]
+B [shape=box, color=@fresh, corner-radius=.15]
+P [shape=prism, color=@fresh, corner-radius=.1]
+O [shape=octahedron, color=@fresh, corner-radius=.08]
