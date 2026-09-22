@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use crate::geometry::{Anchor, Geometry, LineStyle, Path};
+use crate::geometry::{Anchor, ArrowGeom, Geometry, LineStyle, Path};
 use crate::layout::V3;
 
 const SCALE: f64 = 40.0;
@@ -54,6 +54,10 @@ pub fn debug_svg(geom: &Geometry) -> String {
                 );
             }
         }
+    }
+    for arrow in geom.lines.iter().filter_map(|l| l.arrow.as_ref()) {
+        let (ArrowGeom::Flat { shape: path, .. } | ArrowGeom::Cone { outline: path, .. }) = arrow;
+        let _ = writeln!(s, r##"<polygon points="{}" fill="#333"/>"##, points(path));
     }
     for t in &geom.tensors {
         let _ = writeln!(

@@ -14,6 +14,8 @@ pub enum Part {
     Tensor(TensorId),
     /// A bond or leg, by its position in `Geometry::lines`.
     Line(usize),
+    /// A line's arrowhead, drawn right after the line.
+    Arrow(usize),
     /// A label, by its position in `Geometry::labels`.
     Label(usize),
 }
@@ -90,8 +92,12 @@ pub fn order(net: &Network, geom: &Geometry) -> Vec<Fragment> {
         let class = if word(&attrs, "layer") == Some("front") { Class::Front } else { Class::Bonds };
         key(Pass::Scene, class, number(&attrs, "z").unwrap_or(0.0), l.index.0 as f64)
     };
-    for k in 0..geom.lines.len() {
+    for (k, line) in geom.lines.iter().enumerate() {
         out.push(Fragment { key: line_key(k), part: Part::Line(k) });
+        if line.arrow.is_some() {
+            let key = line_key(k);
+            out.push(Fragment { key: Key { order: key.order + 0.25, ..key }, part: Part::Arrow(k) });
+        }
     }
     for (k, label) in geom.labels.iter().enumerate() {
         let key = match label.owner {

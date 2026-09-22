@@ -149,6 +149,18 @@ centreline:
 The highlight follows the tube's axis through bends and arcs, on the side
 facing the light.
 
+Arrows (language section 8.11):
+
+- `head` and `shaft` are filled flat: in the line's colour on a line, and on
+  a tube in the glint's colour (`.06c + .94`), which stays clean on light
+  tubes where a darker mix looks grey.
+- `beside` is filled in the line's colour, or a tube's outline colour.
+- A `cone` is lit like its tube, with the same light and terms, but its
+  normal leans towards the tip by the cone's half-angle α: at lateral offset
+  q (over the cone's radius there), n = cos α · (q·ê, √(1 − q²)) + sin α · â,
+  where ê is the page normal of the axis and â the axis.  Its outline is the
+  tube's.
+
 ## 5. Label colours
 
 Unless `label-color` names a colour, a label's colour is chosen from its

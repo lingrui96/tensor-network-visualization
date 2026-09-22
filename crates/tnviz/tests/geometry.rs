@@ -196,3 +196,98 @@ fn tube_labels_go_beside_when_they_do_not_fit() {
     assert_eq!(label.anchor, Anchor::Center);
     assert_eq!(g.warnings.len(), 1);
 }
+
+/// An arrowhead's tip and the midpoint of its base.
+fn arrow_axis(line: &tnviz::LineGeom) -> (V3, V3) {
+    let Some(tnviz::ArrowGeom::Flat { shape: arrow, .. }) = &line.arrow else { panic!("a flat arrow") };
+    // A head alone: base corner, tip, base corner.
+    let tip = arrow.pieces[1].start();
+    let base = (arrow.pieces[0].start() + arrow.pieces[2].start()) * 0.5;
+    (tip, base)
+}
+
+#[test]
+fn arrows_point_along_their_line() {
+    let (_, g) = build("A at (0, 0)\nB at (4, 0)\nA - B [arrow=forward]\n");
+    let (tip, base) = arrow_axis(&g.lines[0]);
+    assert!(tip.x > base.x && close(tip.y, 0.0));
+    // Centred on the middle of the visible part, which is the middle here.
+    assert!(close((tip.x + base.x) / 2.0, 2.0));
+
+    let (_, g) = build("A at (0, 0)\nB at (4, 0)\nA - B [arrow=backward, arrow-pos=.25]\n");
+    let (tip, base) = arrow_axis(&g.lines[0]);
+    assert!(tip.x < base.x);
+    let (from, to) = g.lines[0].visible;
+    assert!(close((tip.x + base.x) / 2.0, from + 0.25 * (to - from)));
+
+    // On a leg, forward is away from the tensor.
+    let (_, g) = build("A: leg down\nleg [arrow=forward]\n");
+    let (tip, base) = arrow_axis(&g.lines[0]);
+    assert!(tip.y < base.y);
+    assert!(g.lines[0].arrow.is_some());
+}
+
+#[test]
+fn arrows_clear_a_label_on_their_tube() {
+    let (_, g) = build(
+        "A at (0, 0)\nB at (4, 0)\nA - B [tube, width=.4, label=$k$, arrow=forward, arrow-style=head]\n",
+    );
+    let label = &g.labels.iter().find(|l| l.on_line).unwrap();
+    let (tip, base) = arrow_axis(&g.lines[0]);
+    assert!(base.x > label.pos.x + label.size.0 / 2.0, "the arrow is past the label");
+    assert!(tip.x > base.x);
+    // No room: a warning, and no arrow.
+    let (_, g) = build("A at (0, 0)\nB at (1.2, 0)\nA - B [tube, width=.6, arrow=forward]\n");
+    assert!(g.lines[0].arrow.is_none());
+    assert!(g.warnings.iter().any(|w| w.contains("arrow does not fit")), "{:?}", g.warnings);
+}
+
+#[test]
+fn arrow_styles() {
+    // Tubes end in a cone by default: its tip on the second tensor's
+    // silhouette, and the tube cut at its base.
+    let (_, g) = build("A at (0, 0)\nB at (4, 0)\nA - B [tube, arrow=forward]\n");
+    let line = &g.lines[0];
+    let Some(tnviz::ArrowGeom::Cone { outline, base, length, .. }) = &line.arrow else { panic!("a cone") };
+    let tip = outline.pieces[1].start();
+    assert!(close(tip.x, line.visible.1) && close(tip.x - base.x, *length));
+    let tube_end = line.outline.as_ref().unwrap().sample(0.01).iter().map(|p| p.x).fold(f64::MIN, f64::max);
+    assert!(close(tube_end, base.x), "the tube stops at the cone's base");
+
+    // A label on the tube is centred on the shaft, clear of the cone.
+    let (_, g) = build("A at (0, 0)\nB at (4, 0)\nA - B [tube, width=.4, label=$k$, arrow=forward]\n");
+    let (from, _) = g.lines[0].visible;
+    let Some(tnviz::ArrowGeom::Cone { base, .. }) = &g.lines[0].arrow else { panic!("a cone") };
+    let label = g.labels.iter().find(|l| l.on_line).unwrap();
+    assert!(close(label.pos.x, (from + base.x) / 2.0));
+
+    // Beside: above a horizontal tube, parallel to it.
+    let (_, g) = build("A at (0, 0)\nB at (4, 0)\nA - B [tube, arrow=forward, arrow-style=beside]\n");
+    let Some(tnviz::ArrowGeom::Flat { shape, beside: true }) = &g.lines[0].arrow else { panic!("beside") };
+    assert!(shape.sample(0.01).iter().all(|p| p.y > g.lines[0].width / 2.0));
+
+    // Shaft: on the tube's axis, longer than a head.
+    let (_, g) = build("A at (0, 0)\nB at (4, 0)\nA - B [tube, arrow=forward, arrow-style=shaft]\n");
+    let Some(tnviz::ArrowGeom::Flat { shape, beside: false }) = &g.lines[0].arrow else { panic!("shaft") };
+    let xs: Vec<f64> = shape.sample(0.01).iter().map(|p| p.x).collect();
+    let span = xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min);
+    assert!(span > 2.0 * 0.9 * 0.22);
+}
+
+#[test]
+fn a_label_lies_over_a_shaft() {
+    let (net, g) = build(
+        "A at (0, 0)\nB at (4, 0)\nA - B [tube, width=.4, label=$k$, arrow=forward, arrow-style=shaft]\n",
+    );
+    let label = g.labels.iter().find(|l| l.on_line).unwrap();
+    let Some(tnviz::ArrowGeom::Flat { shape, .. }) = &g.lines[0].arrow else { panic!("a shaft") };
+    let xs: Vec<f64> = shape.sample(0.01).iter().map(|p| p.x).collect();
+    let mid =
+        (xs.iter().cloned().fold(f64::MIN, f64::max) + xs.iter().cloned().fold(f64::MAX, f64::min)) / 2.0;
+    assert!(close(mid, label.pos.x), "the shaft stays centred under the label");
+    // The label is drawn after the arrow.
+    let parts: Vec<tnviz::Part> = tnviz::order(&net, &g).into_iter().map(|f| f.part).collect();
+    let at = |p: tnviz::Part| parts.iter().position(|q| *q == p).unwrap();
+    let k = g.labels.iter().position(|l| l.on_line).unwrap();
+    assert!(at(tnviz::Part::Arrow(0)) < at(tnviz::Part::Label(k)));
+}

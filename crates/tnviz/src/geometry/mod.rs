@@ -96,6 +96,21 @@ pub struct LineGeom {
     pub caps: (Cap, Cap),
     /// The arc-length range outside the end tensors' silhouettes.
     pub visible: (f64, f64),
+    /// The arrow (section 8.11).
+    pub arrow: Option<ArrowGeom>,
+}
+
+/// An arrow on or beside a line (section 8.11).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArrowGeom {
+    /// A flat shape, filled: a head alone or with a shaft, on the line, or
+    /// beside it when `beside`.
+    Flat { shape: Path, beside: bool },
+    /// A cone ending the tube, which stops at its base: the tube itself is
+    /// the arrow.  The tip touches the tensor it points to, or ends the leg.
+    /// `base_at` is the base's arc length along the centreline, and
+    /// `forward` whether the cone points along it.
+    Cone { outline: Path, base: V3, axis: V3, length: f64, radius: f64, base_at: f64, forward: bool },
 }
 
 /// Where a label's box is attached.
@@ -202,6 +217,20 @@ pub fn geometry(
             labels.push(label);
         }
     }
+    for (k, line) in lines.iter_mut().enumerate() {
+        let label = labels.iter().find(|l| l.owner == LabelOwner::Line(k));
+        line.arrow = g.arrow(line, label);
+        // A cone replaces the end of its tube.
+        if let (Some(ArrowGeom::Cone { base_at, forward, .. }), Some(_)) = (&line.arrow, &line.outline) {
+            let total = line.centerline.length();
+            let (s0, s1, caps) = if *forward {
+                (0.0, *base_at, (line.caps.0, Cap::Flat))
+            } else {
+                (*base_at, total, (Cap::Flat, line.caps.1))
+            };
+            line.outline = Some(tube_outline(&line.centerline.slice(s0, s1), line.width / 2.0, caps));
+        }
+    }
     Ok(Geometry { tensors, lines, labels, crossings, warnings: g.warnings })
 }
 
@@ -236,6 +265,51 @@ struct Builder<'a> {
 
 fn left(d: V3) -> V3 {
     V3::xy(-d.y, d.x)
+}
+
+/// The arrow style of tubes without `arrow-style` (section 8.11).
+const TUBE_ARROW: &str = "cone";
+
+/// A flat arrow along a centreline, centred at arc length `s` and moved
+/// sideways by `offset`: a head `head` long and `wide` wide, and before it a
+/// shaft `shaft` wide filling the rest of `total`.  The shaft follows the
+/// centreline's bends.
+#[allow(clippy::too_many_arguments)]
+fn flat_arrow(
+    path: &Path,
+    s: f64,
+    sense: f64,
+    total: f64,
+    head: f64,
+    wide: f64,
+    shaft: f64,
+    offset: V3,
+) -> Path {
+    let at = |u: f64| {
+        let (p, t) = path.at(u);
+        (p + offset, t * sense)
+    };
+    let tip = s + sense * total / 2.0;
+    let head_base = tip - sense * head;
+    let (hb, ht) = at(head_base);
+    let hn = left(ht);
+    let mut pts = Vec::new();
+    let shaft_len = total - head;
+    let samples = if shaft_len > 1e-9 && shaft > 1e-9 { 12 } else { 0 };
+    let tail = s - sense * total / 2.0;
+    let along: Vec<(V3, V3)> =
+        (0..=samples).map(|i| at(tail + (head_base - tail) * i as f64 / samples.max(1) as f64)).collect();
+    if samples > 0 {
+        pts.extend(along.iter().map(|(p, t)| *p + left(*t) * (shaft / 2.0)));
+    }
+    pts.push(hb + hn * (wide / 2.0));
+    pts.push(at(tip).0);
+    pts.push(hb - hn * (wide / 2.0));
+    if samples > 0 {
+        pts.extend(along.iter().rev().map(|(p, t)| *p - left(*t) * (shaft / 2.0)));
+    }
+    let n = pts.len();
+    Path { pieces: (0..n).map(|k| Piece::Line { a: pts[k], b: pts[(k + 1) % n] }).collect(), closed: true }
 }
 
 /// A name as TeX math, the way backends typeset it: `A[1,2]'` as
@@ -454,6 +528,7 @@ impl Builder<'_> {
                 outline,
                 caps,
                 visible: (0.0, 0.0),
+                arrow: None,
             },
             vertices,
             filleted,
@@ -540,6 +615,7 @@ impl Builder<'_> {
             outline,
             caps,
             visible: (0.0, 0.0),
+            arrow: None,
         }
     }
 
@@ -704,7 +780,158 @@ impl Builder<'_> {
         (hidden_a, (total - hidden_b).max(hidden_a))
     }
 
-    // ---- Labels ---------------------------------------------------------
+    // ---- Labels and arrows ----------------------------------------------
+
+    fn line_attrs(&self, line: &LineGeom) -> Vec<Attr> {
+        match line.kind {
+            LineKind::Bond => self.net.bond_style(line.index),
+            LineKind::Leg => {
+                let (t, s) = self.net.index(line.index).holders()[0];
+                self.net.leg_style(t, s)
+            }
+        }
+    }
+
+    /// A line's arrow direction (1 forward, -1 backward) and style, with
+    /// the defaults of section 8.11.
+    fn arrow_style(&self, attrs: &[Attr], line: &LineGeom) -> Option<(f64, &'static str)> {
+        let sense = match word(attrs, "arrow") {
+            Some("forward") => 1.0,
+            Some("backward") => -1.0,
+            _ => return None,
+        };
+        let tube = line.style == LineStyle::Tube;
+        let style = match word(attrs, "arrow-style") {
+            Some("beside") => "beside",
+            Some("shaft") if tube => "shaft",
+            Some("cone") if tube => "cone",
+            // `head`, or `shaft` and `cone` on a line.
+            Some(_) => "head",
+            None if tube => TUBE_ARROW,
+            None => "head",
+        };
+        Some((sense, style))
+    }
+
+    /// The length of a cone arrow (section 8.11), if the line ends in one.
+    fn cone_length(&self, attrs: &[Attr], line: &LineGeom) -> Option<(f64, f64)> {
+        match self.arrow_style(attrs, line)? {
+            (sense, "cone") => Some((sense, 1.7 * line.width * number(attrs, "arrow-size").unwrap_or(1.0))),
+            _ => None,
+        }
+    }
+
+    /// Where along a line its label sits, as arc length (section 8.8): on
+    /// the visible part, less a cone arrow.
+    fn label_arc(&self, attrs: &[Attr], line: &LineGeom) -> f64 {
+        let (mut from, mut to) = line.visible;
+        match self.cone_length(attrs, line) {
+            Some((sense, len)) if sense > 0.0 => to -= len,
+            Some((_, len)) => from += len,
+            None => {}
+        }
+        from + number(attrs, "label-pos").unwrap_or(0.5) * (to - from)
+            + self.length(attrs, "label-along", false).unwrap_or(0.0)
+    }
+
+    /// A line's arrow (section 8.11), pointing from the first holder to the
+    /// second (for a leg, away from its tensor), or back for `backward`.
+    /// Without `arrow-pos` it is centred on the visible part, or, for a
+    /// head, just past a label printed on the line; beside the line, it
+    /// keeps to the side away from a label there.
+    fn arrow(&mut self, line: &LineGeom, label: Option<&LabelGeom>) -> Option<ArrowGeom> {
+        let attrs = self.line_attrs(line);
+        let (sense, style) = self.arrow_style(&attrs, line)?;
+        let tube = line.style == LineStyle::Tube;
+        let k = number(&attrs, "arrow-size").unwrap_or(1.0);
+        let (d, em) = (line.width, self.em());
+        // Head length and width, shaft width, and the length taken along
+        // the line.
+        let (head, wide, shaft, total): (f64, f64, f64, f64) = match (style, tube) {
+            ("beside", _) => (0.55 * em * k, 0.5 * em * k, 0.09 * em, 2.4 * em * k),
+            ("shaft", _) => (0.9 * d * k, 0.75 * d * k, 0.22 * d * k, 2.8 * d * k),
+            (_, true) => (0.9 * d * k, 0.75 * d * k, 0.0, 0.9 * d * k),
+            _ => (0.55 * em * k, 0.5 * em * k, 0.0, 0.55 * em * k),
+        };
+        let (from, to) = line.visible;
+        if style == "cone" {
+            return self.cone(line, sense, k, from, to);
+        }
+        // A shaft shortens to .8 of the visible part, down to 1.6 heads.
+        let total = if shaft > 0.0 { total.min(0.8 * (to - from)).max(1.6 * head) } else { total };
+        let fits = |s: f64| s - total / 2.0 >= from - 1e-9 && s + total / 2.0 <= to + 1e-9;
+        // Only a head makes way for a label on the line; a shaft lies under
+        // it, and the label is printed over the shaft.
+        let on_label = label.filter(|l| l.on_line && style == "head");
+        let s = match (number(&attrs, "arrow-pos"), on_label) {
+            (Some(f), _) => Some(from + f * (to - from)),
+            (None, Some(label)) => {
+                // Past the label in the arrow's direction, or before it.
+                let at = self.label_arc(&attrs, line);
+                let clear = label.size.0 / 2.0 + 0.2 * em + total / 2.0;
+                [at + sense * clear, at - sense * clear].into_iter().find(|&s| fits(s))
+            }
+            (None, None) => Some((from + to) / 2.0),
+        };
+        let Some(s) = s.filter(|&s| fits(s)) else {
+            let i = self.net.index(line.index);
+            let n = index_display(&i.name, i.prime);
+            self.warnings.push(format!("{n}: the arrow does not fit on the line"));
+            return None;
+        };
+
+        // Beside the line: the side whose normal points up (or left), or
+        // away from a label beside the line.
+        let beside = style == "beside";
+        let offset = if beside {
+            let (_, t) = line.centerline.at(s);
+            let mut side = left(t);
+            if side.y < -1e-9 || (side.y.abs() <= 1e-9 && side.x > 0.0) {
+                side = -side;
+            }
+            if let Some(Anchor::Toward(dir)) = label.filter(|l| !l.on_line).map(|l| &l.anchor) {
+                side = *dir;
+            }
+            side * (d / 2.0 + 0.3 * em + wide / 2.0)
+        } else {
+            V3::ZERO
+        };
+        let shape = flat_arrow(&line.centerline, s, sense, total, head, wide, shaft, offset);
+        Some(ArrowGeom::Flat { shape, beside })
+    }
+
+    /// A cone arrow (section 8.11): the tube ends in a cone whose tip is at
+    /// the end of the visible part it points to.
+    fn cone(&mut self, line: &LineGeom, sense: f64, k: f64, from: f64, to: f64) -> Option<ArrowGeom> {
+        let d = line.width;
+        let (length, radius) = (1.7 * d * k, 0.9 * d * k);
+        debug_assert!(
+            self.cone_length(&self.line_attrs(line), line).is_some_and(|(_, l)| (l - length).abs() < 1e-12)
+        );
+        if to - from < length + d {
+            let i = self.net.index(line.index);
+            let n = index_display(&i.name, i.prime);
+            self.warnings.push(format!("{n}: the arrow does not fit on the line"));
+            return None;
+        }
+        let tip_at = if sense > 0.0 { to } else { from };
+        let base_at = tip_at - sense * length;
+        let tip = line.centerline.at(tip_at).0;
+        let base = line.centerline.at(base_at).0;
+        let axis = (tip - base).unit()?;
+        let n = left(axis);
+        let corners = [base + n * radius, tip, base - n * radius];
+        let pieces = (0..3).map(|k| Piece::Line { a: corners[k], b: corners[(k + 1) % 3] }).collect();
+        Some(ArrowGeom::Cone {
+            outline: Path { pieces, closed: true },
+            base,
+            axis,
+            length,
+            radius,
+            base_at,
+            forward: sense > 0.0,
+        })
+    }
 
     fn line_label(&mut self, k: usize, line: &LineGeom) -> Option<LabelGeom> {
         let index = self.net.index(line.index);
@@ -730,10 +957,7 @@ impl Builder<'_> {
         let id = format!("{prefix}:{}", index_display(&index.name, index.prime));
         let (size, measured) = self.label_size(&id, text.as_str());
 
-        let (from, to) = line.visible;
-        let s = from
-            + number(&attrs, "label-pos").unwrap_or(0.5) * (to - from)
-            + self.length(&attrs, "label-along", false).unwrap_or(0.0);
+        let s = self.label_arc(&attrs, line);
         let (mut p, tangent) = line.centerline.at(s.clamp(0.0, line.centerline.length()));
         p = p + left(tangent) * self.length(&attrs, "label-offset", false).unwrap_or(0.0);
         // A tube label goes on the tube when it fits, and beside otherwise.

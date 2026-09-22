@@ -471,6 +471,36 @@ width of the rims and `highlight-inset` moves the brightest part inwards.
 The formulas are the engine's lighting model, documented with the engine; the
 language defines only these parameters.
 
+### 8.11 Arrows
+
+`arrow=forward` puts an arrow on a bond pointing from the first tensor that
+holds its index to the second, and on an open leg pointing away from its
+tensor; `backward` points the other way.  `arrow-style` chooses its form:
+
+| Style | Form | Default for |
+|---|---|---|
+| `head` | a filled isosceles triangle on the centreline, .55em long and .5em wide on a line, .9 and .75 times the diameter on a tube | lines |
+| `shaft` | on a tube, a head with a shaft .22 diameters wide behind it, 2.8 diameters long in all, following the centreline's bends | — |
+| `beside` | a line arrow (a .09em shaft and a head) 2.4em long, parallel to the line and .3em clear of it, on the side whose normal points up (or left), or on the side away from a label beside the line | — |
+| `cone` | on a tube, the tube itself becomes the arrow: it stops at the base of a cone 1.7 diameters long and 1.8 diameters wide, whose tip is at the end of the visible part it points to | tubes |
+
+On a line, `shaft` and `cone` mean `head`.
+
+- **Size.**  `arrow-size` scales every length above.  A shaft shortens to .8
+  of the visible part, but not below 1.6 heads.
+- **Position.**  `head`, `shaft`, and `beside` are centred at the fraction
+  `arrow-pos` of the visible length.  Without `arrow-pos` they are centred
+  on the visible part.  A label printed on the line (section 8.8) is drawn
+  over a `shaft`; a `head` instead sits just past the label in the arrow's
+  direction, .2em clear of it, or just before it if there is no room past
+  it.  A cone
+  is always at the end it points to, and a line's label is then placed on
+  the visible part less the cone.
+- An arrow that does not fit on the visible part is left out, with a
+  warning.
+- It is drawn right after its line and before the line's label; its colours
+  and a cone's shading come from the lighting model.
+
 ## 9. Index syntax (core and exchange format)
 
 Rust exports this form.  It can also be written by hand when indices must be
@@ -496,7 +526,8 @@ tensor W[n] (s[n], s[n]', w[n-1], w[n])  for n in 2..3
 - An index may carry a dimension: `index l[1..3] : Link [dim=8]`.
 - Quantum-number direction: `index l[1] [arrow=forward]` draws an arrow from
   the first tensor that holds the index to the second (`backward` the other
-  way).  Importers map a library's In and Out to these.
+  way); on an open leg, `forward` points away from its tensor.  Importers
+  map a library's In and Out to these (section 8.11).
 - The simple syntax and the index syntax may be mixed in one file; both
   produce the same model.
 
@@ -593,7 +624,10 @@ Unknown attributes, and values of the wrong type, are errors.
 | `loop-size` | bonds | geometry | length | `.45` | geometry |
 | `crossing` | bonds | geometry | `none`, `hop` | `none` | geometry |
 | `hop-radius` | bonds | geometry | length | `max(.15, .7 × (upper width + lower width) + .03)` | geometry |
-| `arrow` | bonds | appearance | `none`, `forward`, `backward` | from the index direction | backend |
+| `arrow` | bonds, legs | geometry | `none`, `forward`, `backward` | `none` | geometry |
+| `arrow-pos` | bonds, legs | geometry | number in [0, 1] | `.5`, or past a label on the line | geometry |
+| `arrow-style` | bonds, legs | geometry | `head`, `shaft`, `beside`, `cone` | line `head`, tube `cone` | geometry |
+| `arrow-size` | bonds, legs | geometry | number | `1` | geometry |
 | `layer` | bonds | order | `back`, `front` | `back` | order |
 | `z` | bonds | order | number | `0` | order |
 | `leg-dir` | legs, bond ends | layout | direction | section 7.3 | layout |

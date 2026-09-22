@@ -27,8 +27,8 @@ mod debug_svg;
 
 pub use error::{Error, Pos, Result};
 pub use geometry::{
-    Anchor, Cap, Crossing, Geometry, GeometryOptions, LabelGeom, LabelOwner, LabelSizes, LabelText, LineGeom,
-    LineKind, LineStyle, Path, Piece, Shape, TensorGeom, geometry,
+    Anchor, ArrowGeom, Cap, Crossing, Geometry, GeometryOptions, LabelGeom, LabelOwner, LabelSizes,
+    LabelText, LineGeom, LineKind, LineStyle, Path, Piece, Shape, TensorGeom, geometry,
 };
 pub use lang::{VERSION, parse, to_tnv};
 pub use layout::{
@@ -36,7 +36,7 @@ pub use layout::{
 };
 pub use lighting::expr::{Expr, Program, ps_number};
 pub use lighting::{
-    Colour, LabelColour, Lighting, LineLook, Other, Shading, Shadow, Stroke, TensorLook, lighting,
+    ArrowLook, Colour, LabelColour, Lighting, LineLook, Other, Shading, Shadow, Stroke, TensorLook, lighting,
 };
 pub use model::{
     Camera, Dim, Direction, Group, Index, IndexId, LayoutStmt, LegKey, Network, Relation, Rule, Scene,

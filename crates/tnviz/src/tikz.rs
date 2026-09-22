@@ -5,8 +5,10 @@
 
 use std::fmt::Write;
 
-use crate::geometry::{Anchor, Cap, Geometry, GeometryOptions, LabelOwner, LabelText, LineKind, Path, Piece};
-use crate::lighting::{Colour, LabelColour, Lighting, LineLook, Other, Shading, Stroke};
+use crate::geometry::{
+    Anchor, ArrowGeom, Cap, Geometry, GeometryOptions, LabelOwner, LabelText, LineKind, Path, Piece,
+};
+use crate::lighting::{ArrowLook, Colour, LabelColour, Lighting, LineLook, Other, Shading, Stroke};
 use crate::model::Network;
 use crate::order::{Fragment, Part};
 use crate::registry::get;
@@ -98,6 +100,20 @@ impl Writer<'_> {
                     }
                 }
             }
+            Part::Arrow(k) => match (&self.geom.lines[k].arrow, &self.lighting.arrows[k]) {
+                (Some(ArrowGeom::Flat { shape, .. }), Some(ArrowLook::Fill(fill))) => {
+                    let _ = writeln!(s, "\\tnvFill{{{}}}{{{}}}{{1}}%", path_code(shape), colour(fill));
+                }
+                (
+                    Some(ArrowGeom::Cone { outline, .. }),
+                    Some(ArrowLook::Cone { shading, outline: stroke }),
+                ) => {
+                    let path = path_code(outline);
+                    shade(s, &path, shading);
+                    self.stroke(s, &path, stroke, "round");
+                }
+                _ => {}
+            },
             Part::Label(k) => self.label(s, k),
         }
     }

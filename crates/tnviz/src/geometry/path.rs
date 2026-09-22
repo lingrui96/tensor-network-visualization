@@ -207,6 +207,30 @@ impl Path {
         out
     }
 
+    /// The open part of the path between arc lengths `s0` and `s1`.
+    pub fn slice(&self, s0: f64, s1: f64) -> Path {
+        let mut pieces = Vec::new();
+        let mut offset = 0.0;
+        for piece in &self.pieces {
+            let len = piece.length();
+            let (a, b) = ((s0 - offset).max(0.0), (s1 - offset).min(len));
+            if b > a + EPS {
+                pieces.push(match *piece {
+                    Piece::Line { a: p, b: q } => {
+                        let d = (q - p).unit().unwrap_or(V3::xy(1.0, 0.0));
+                        Piece::Line { a: p + d * a, b: p + d * b }
+                    }
+                    Piece::Arc { center, radius, start, sweep } => {
+                        let turn = sweep.signum() / radius;
+                        Piece::Arc { center, radius, start: start + turn * a, sweep: turn * (b - a) }
+                    }
+                });
+            }
+            offset += len;
+        }
+        Path { pieces, closed: false }
+    }
+
     pub fn transformed(&self, rotation: f64, shift: V3) -> Path {
         Path {
             pieces: self.pieces.iter().map(|p| p.transformed(rotation, shift)).collect(),

@@ -13,7 +13,9 @@ use expr::{
     Expr, Program, abs, add, and, c, clamp01, div, exp, if_, lt, max, min, mul, neg, pow, smooth, sqrt, sub,
 };
 
-use crate::geometry::{Geometry, GeometryOptions, LabelOwner, LineKind, LineStyle, Piece, Shape, TensorGeom};
+use crate::geometry::{
+    ArrowGeom, Geometry, GeometryOptions, LabelOwner, LineKind, LineStyle, Piece, Shape, TensorGeom,
+};
 use crate::layout::V3;
 use crate::model::Network;
 use crate::registry::{get, number, word};
@@ -104,6 +106,16 @@ pub enum LabelColour {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum ArrowLook {
+    Fill(Colour),
+    /// A cone: its shading and the stroke of its edges.
+    Cone {
+        shading: Shading,
+        outline: Stroke,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Lighting {
     /// Base colours as xcolor expressions, referred to by slot.
     pub slots: Vec<String>,
@@ -111,6 +123,8 @@ pub struct Lighting {
     pub tensors: Vec<TensorLook>,
     /// Indexed like `Geometry::lines`.
     pub lines: Vec<LineLook>,
+    /// Each line's arrow, indexed like `Geometry::lines`.
+    pub arrows: Vec<Option<ArrowLook>>,
     /// Indexed like `Geometry::labels`.
     pub labels: Vec<LabelColour>,
 }
@@ -248,6 +262,28 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
         })
         .collect();
 
+    // Flat arrows take the line's colour; on a tube, the glint's; beside a
+    // tube, its outline's.  A cone is lit like the tube it grows from.
+    let arrows = geom
+        .lines
+        .iter()
+        .zip(&line_slots)
+        .map(|(l, &slot)| {
+            let outline = Colour::mix(slot, 0.62, Other::Black);
+            l.arrow.as_ref().map(|a| match (a, l.style) {
+                (ArrowGeom::Flat { beside: false, .. }, LineStyle::Tube) => {
+                    ArrowLook::Fill(Colour::mix(slot, 0.06, Other::White))
+                }
+                (ArrowGeom::Flat { beside: true, .. }, LineStyle::Tube) => ArrowLook::Fill(outline),
+                (ArrowGeom::Flat { .. }, LineStyle::Line) => ArrowLook::Fill(Colour::base(slot)),
+                (cone @ ArrowGeom::Cone { .. }, _) => ArrowLook::Cone {
+                    shading: cone_shading(cone, slot, light),
+                    outline: Stroke { colour: outline, width: TUBE_OUTLINE_EM * em },
+                },
+            })
+        })
+        .collect();
+
     let black = slots.get("black");
     let light_text = slots.get("white!92!black");
     let labels = geom
@@ -281,7 +317,7 @@ pub fn lighting(net: &Network, geom: &Geometry, opts: &GeometryOptions) -> Light
         })
         .collect();
 
-    Lighting { slots: slots.0, tensors, lines, labels }
+    Lighting { slots: slots.0, tensors, lines, arrows, labels }
 }
 
 fn line_attrs(net: &Network, kind: LineKind, index: crate::model::IndexId) -> Vec<Attr> {
@@ -547,6 +583,45 @@ fn tube_shading(pieces: &[Piece], outline: Vec<V3>, radius: f64, slot: usize, li
     };
     p.output([channel(0), channel(1), channel(2)]);
     let (center, extent) = domain(&outline);
+    Shading { center, extent, program: p }
+}
+
+/// A cone ending a tube, lit like the tube: its normal leans towards the
+/// tip by the cone's half-angle.
+fn cone_shading(cone: &ArrowGeom, slot: usize, light: f64) -> Shading {
+    let ArrowGeom::Cone { outline, base, axis, length, radius, .. } = cone else { unreachable!("a cone") };
+    let n = V3::xy(-axis.y, axis.x);
+    let half = radius.atan2(*length);
+    let (ca, sa) = (half.cos(), half.sin());
+    let mut p = Program::new();
+    let dx = p.bind(sub(Expr::X, c(base.x)));
+    let dy = p.bind(sub(Expr::Y, c(base.y)));
+    let u = p.bind(add(mul(dx.clone(), c(axis.x)), mul(dy.clone(), c(axis.y))));
+    let v = p.bind(add(mul(dx, c(n.x)), mul(dy, c(n.y))));
+    let r = p.bind(add(mul(c(*radius), sub(c(1.0), clamp01(div(u, c(*length))))), c(1e-6)));
+    let q = p.bind(max(c(-1.0), min(c(1.0), div(v, r))));
+    let qz = p.bind(sqrt(max(c(0.0), sub(c(1.0), mul(q.clone(), q.clone())))));
+    // The normal: the radial direction turned towards the axis by `half`.
+    let nx = p.bind(add(mul(c(ca * n.x), q.clone()), c(sa * axis.x)));
+    let ny = p.bind(add(mul(c(ca * n.y), q), c(sa * axis.y)));
+    let nz = p.bind(mul(c(ca), qz));
+    let el = TUBE_ELEVATION.to_radians();
+    let l = V3::new(el.cos() * light.to_radians().cos(), el.cos() * light.to_radians().sin(), el.sin());
+    let h = V3::new(l.x, l.y, l.z + 1.0).unit().unwrap();
+    let dot = |v: V3| add(add(mul(nx.clone(), c(v.x)), mul(ny.clone(), c(v.y))), mul(nz.clone(), c(v.z)));
+    let diffuse = p.bind(max(c(0.0), dot(l)));
+    let spec = p.bind(pow(max(c(0.0), dot(h)), c(TUBE_SHININESS)));
+    let channel = |ch: u8| {
+        min(
+            c(1.0),
+            add(
+                mul(param(slot, ch), add(c(TUBE_AMBIENT), mul(c(TUBE_DIFFUSE), diffuse.clone()))),
+                mul(c(TUBE_SPECULAR), spec.clone()),
+            ),
+        )
+    };
+    p.output([channel(0), channel(1), channel(2)]);
+    let (center, extent) = domain(&outline.sample(0.02));
     Shading { center, extent, program: p }
 }
 
