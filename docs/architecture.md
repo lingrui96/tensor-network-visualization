@@ -68,8 +68,8 @@ computed position and route is written out as `at` and `via`.
 
 ### Lighting model
 
-The engine owns the lighting model, shared by every backend so that all
-outputs look alike:
+The engine owns the lighting model (docs/lighting.md), shared by every
+backend so that all outputs look alike:
 
 - every colour derived from a base colour (the glass body, rims, outlines,
   shadows, tube shades) as a formula of the base colour's RGB;
@@ -223,9 +223,10 @@ cascade), E4 (layout records parallel bonds and loops as route intents and
 leaves sizes and leg lengths to geometry), E5 (the `spacing` statement), E6
 (stages are private modules; the crate root exports the API, and the model
 changes only through checked operations), E7 (`LayoutStmt` and
-`Placement`).  E8 is in progress: the geometry stage is built for 2D;
-order, the lighting model, backends, `.tnvm` input, and resolved printing
-remain.
+`Placement`).  E8 is in progress: the geometry and order stages are built
+for 2D, the lighting model is built and documented in docs/lighting.md,
+and the TikZ backend writes the runtime protocol; the `.tnvm` input, the
+LaTeX interface, and resolved printing remain.
 
 ### 6.3 CLI (crates/tnviz-cli)
 

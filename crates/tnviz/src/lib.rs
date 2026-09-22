@@ -12,9 +12,12 @@ mod error;
 mod geometry;
 mod lang;
 mod layout;
+mod lighting;
 mod model;
 mod name;
+mod order;
 mod registry;
+mod tikz;
 mod value;
 
 #[cfg(feature = "debug-svg")]
@@ -22,19 +25,25 @@ mod debug_svg;
 
 pub use error::{Error, Pos, Result};
 pub use geometry::{
-    Anchor, Cap, Crossing, Geometry, GeometryOptions, LabelGeom, LabelSizes, LineGeom, LineKind, LineStyle,
-    Path, Piece, Shape, TensorGeom, geometry,
+    Anchor, Cap, Crossing, Geometry, GeometryOptions, LabelGeom, LabelOwner, LabelSizes, LabelText, LineGeom,
+    LineKind, LineStyle, Path, Piece, Shape, TensorGeom, geometry,
 };
 pub use lang::{VERSION, parse, to_tnv};
 pub use layout::{
     BondEnd, DEFAULT_SPACING, PlacedBond, PlacedLeg, PlacedTensor, Placement, Route, V3, layout,
+};
+pub use lighting::expr::{Expr, Program, ps_number};
+pub use lighting::{
+    Colour, LabelColour, Lighting, LineLook, Other, Shading, Shadow, Stroke, TensorLook, lighting,
 };
 pub use model::{
     Camera, Dim, Direction, Group, Index, IndexId, LayoutStmt, LegKey, Network, Relation, Rule, Scene,
     Selector, Slot, Tensor, TensorId,
 };
 pub use name::{Name, NamePattern, SubPattern};
+pub use order::{Class, Fragment, Key, Part, Pass, order};
 pub use registry::{Category, Target, category};
+pub use tikz::{PROTOCOL, tikz};
 pub use value::{Attr, Value, merge_attrs};
 
 #[cfg(feature = "debug-svg")]

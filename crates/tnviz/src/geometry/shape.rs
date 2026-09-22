@@ -74,17 +74,25 @@ impl Shape {
         }
     }
 
-    /// The outline in the tensor's local frame, and the corner radius
-    /// actually used.
-    pub fn outline(self, w: f64, h: f64, corner: f64) -> (Path, f64) {
+    /// The sharp corners of a polygonal shape, counter-clockwise, in the
+    /// local frame; `None` for round shapes.
+    pub fn corners(self, w: f64, h: f64) -> Option<Vec<V3>> {
         let (x, y) = (w / 2.0, h / 2.0);
-        let corners: Vec<V3> = match self {
-            Shape::Orb | Shape::Dot => return (circle(V3::ZERO, x), 0.0),
+        Some(match self {
+            Shape::Orb | Shape::Dot => return None,
             Shape::Rect => vec![V3::xy(-x, -y), V3::xy(x, -y), V3::xy(x, y), V3::xy(-x, y)],
             Shape::Triangle => vec![V3::xy(-x, -y), V3::xy(x, -y), V3::xy(0.0, y)],
             Shape::Diamond => vec![V3::xy(0.0, -y), V3::xy(x, 0.0), V3::xy(0.0, y), V3::xy(-x, 0.0)],
-        };
-        fillet_closed(&corners, corner.max(0.0))
+        })
+    }
+
+    /// The outline in the tensor's local frame, and the corner radius
+    /// actually used.
+    pub fn outline(self, w: f64, h: f64, corner: f64) -> (Path, f64) {
+        match self.corners(w, h) {
+            None => (circle(V3::ZERO, w / 2.0), 0.0),
+            Some(corners) => fillet_closed(&corners, corner.max(0.0)),
+        }
     }
 }
 

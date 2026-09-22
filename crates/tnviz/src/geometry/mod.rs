@@ -107,10 +107,39 @@ pub enum Anchor {
     Toward(V3),
 }
 
+/// What a label belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelOwner {
+    Tensor(TensorId),
+    /// A bond or leg, by its position in `Geometry::lines`.
+    Line(usize),
+}
+
+/// A label's text, as the language writes it: TeX math with its dollars,
+/// or plain text, which a backend prints literally.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LabelText {
+    Math(String),
+    Plain(String),
+}
+
+impl LabelText {
+    pub fn as_str(&self) -> &str {
+        match self {
+            LabelText::Math(s) | LabelText::Plain(s) => s,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LabelGeom {
     /// The label id of docs/protocol.md, such as `t:A[1]` or `b:_link[3]`.
     pub id: String,
+    pub owner: LabelOwner,
+    /// For a line's label: whether it is printed on the line, rather than
+    /// beside it.
+    pub on_line: bool,
+    pub text: LabelText,
     pub pos: V3,
     /// Rotation in degrees.
     pub angle: f64,
@@ -167,8 +196,8 @@ pub fn geometry(
     for line in &mut lines {
         line.visible = g.visible(line, &tensors);
     }
-    for line in &lines {
-        if let Some(label) = g.line_label(line) {
+    for (k, line) in lines.iter().enumerate() {
+        if let Some(label) = g.line_label(k, line) {
             labels.push(label);
         }
     }
@@ -208,6 +237,19 @@ fn left(d: V3) -> V3 {
     V3::xy(-d.y, d.x)
 }
 
+/// A name as TeX math, the way backends typeset it: `A[1,2]'` as
+/// `$A_{1,2}'$`.
+fn math_name(base: &str, subscripts: &[i64], prime: u32) -> String {
+    let mut s = format!("${}", base.replace('_', "\\_"));
+    if !subscripts.is_empty() {
+        let subs: Vec<String> = subscripts.iter().map(|s| s.to_string()).collect();
+        s += &format!("_{{{}}}", subs.join(","));
+    }
+    s += &"'".repeat(prime as usize);
+    s.push('$');
+    s
+}
+
 /// A rough label size in em, before LaTeX has measured it: math commands
 /// count as one character, and scripts shrink.
 fn estimate(text: &str) -> (f64, f64, f64) {
@@ -219,7 +261,10 @@ fn estimate(text: &str) -> (f64, f64, f64) {
             '$' | '{' | '}' | ' ' => {}
             '^' | '_' => script = true,
             '\\' => {
-                while it.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
+                // A command word, or a single escaped character such as `\_`.
+                if it.next_if(|c| c.is_ascii_alphabetic()).is_some() {
+                    while it.next_if(|c| c.is_ascii_alphabetic()).is_some() {}
+                } else {
                     it.next();
                 }
                 chars += if script { 0.7 } else { 1.0 };
@@ -288,18 +333,16 @@ impl Builder<'_> {
             // subscripts as a script: `A[1]` as A₁.
             let text = match get(&style, "label") {
                 Some(Value::Word(w)) if w == "none" => None,
-                Some(Value::Math(s) | Value::Str(s)) => Some(s.clone()),
+                Some(Value::Math(s)) => Some(LabelText::Math(s.clone())),
+                Some(Value::Str(s)) => Some(LabelText::Plain(s.clone())),
                 _ if shape == Shape::Dot => None,
-                _ if t.name.subscripts.is_empty() => Some(t.name.base.clone()),
-                _ => {
-                    let subs: Vec<String> = t.name.subscripts.iter().map(|s| s.to_string()).collect();
-                    Some(format!("{}_{{{}}}", t.name.base, subs.join(",")))
-                }
+                _ => Some(LabelText::Math(math_name(&t.name.base, &t.name.subscripts, 0))),
             };
             let label_id = format!("t:{}", t.name);
-            let label = text.map(|text| self.label_size(&label_id, &text));
+            let label = text.map(|text| (self.label_size(&label_id, text.as_str()), text));
             let pad = self.length(&style, "label-padding", true).unwrap_or(0.3 * self.em());
-            let (a, b) = label.map_or((0.0, 0.0), |((w, h, d), _)| (w / 2.0 + pad, (h + d) / 2.0 + pad));
+            let (a, b) =
+                label.as_ref().map_or((0.0, 0.0), |(((w, h, d), _), _)| (w / 2.0 + pad, (h + d) / 2.0 + pad));
 
             let (mut w, mut h) = shape.default_size();
             let (ew, eh) = (self.length(&style, "width", false), self.length(&style, "height", false));
@@ -325,9 +368,12 @@ impl Builder<'_> {
                 corner_radius: used,
                 outline: local.transformed(placed.rotation, placed.pos),
             });
-            if let Some((size, measured)) = label {
+            if let Some(((size, measured), text)) = label {
                 labels.push(LabelGeom {
                     id: label_id,
+                    owner: LabelOwner::Tensor(id),
+                    on_line: false,
+                    text,
                     pos: placed.pos,
                     angle: 0.0,
                     anchor: Anchor::Center,
@@ -609,7 +655,7 @@ impl Builder<'_> {
 
     // ---- Labels ---------------------------------------------------------
 
-    fn line_label(&mut self, line: &LineGeom) -> Option<LabelGeom> {
+    fn line_label(&mut self, k: usize, line: &LineGeom) -> Option<LabelGeom> {
         let index = self.net.index(line.index);
         let (attrs, prefix) = match line.kind {
             LineKind::Bond => (self.net.bond_style(line.index), "b"),
@@ -618,19 +664,20 @@ impl Builder<'_> {
                 (self.net.leg_style(t, s), "l")
             }
         };
+        let dim = index.dim.map_or("?".into(), |d| d.to_string());
         let text = match get(&attrs, "label")? {
-            Value::Math(s) | Value::Str(s) => s.clone(),
-            Value::Word(w) if w == "dim" => index.dim.map_or("?".into(), |d| d.to_string()),
-            Value::Word(w) if w == "name" => index.name.to_string(),
-            Value::Word(_) => format!(
-                "{}{}",
-                index.dim.map_or("?".into(), |d| d.to_string()),
-                "'".repeat(index.prime as usize)
-            ),
+            Value::Math(s) => LabelText::Math(s.clone()),
+            Value::Str(s) => LabelText::Plain(s.clone()),
+            Value::Word(w) if w == "dim" => LabelText::Plain(dim),
+            Value::Word(w) if w == "name" => {
+                LabelText::Math(math_name(&index.name.base, &index.name.subscripts, index.prime))
+            }
+            Value::Word(_) if index.prime == 0 => LabelText::Plain(dim),
+            Value::Word(_) => LabelText::Math(format!("${dim}{}$", "'".repeat(index.prime as usize))),
             _ => return None,
         };
         let id = format!("{prefix}:{}", index_display(&index.name, index.prime));
-        let (size, measured) = self.label_size(&id, &text);
+        let (size, measured) = self.label_size(&id, text.as_str());
 
         let (from, to) = line.visible;
         let s = from
@@ -671,6 +718,16 @@ impl Builder<'_> {
             (p + n * (line.width / 2.0 + gap), 0.0, Anchor::Toward(-n))
         };
         let shift = registry::points(&attrs, "label-shift").map_or(V3::ZERO, |p| V3::xy(p[0][0], p[0][1]));
-        Some(LabelGeom { id, pos: pos + shift, angle, anchor, size, measured })
+        Some(LabelGeom {
+            id,
+            owner: LabelOwner::Line(k),
+            on_line: on,
+            text,
+            pos: pos + shift,
+            angle,
+            anchor,
+            size,
+            measured,
+        })
     }
 }

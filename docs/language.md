@@ -329,9 +329,10 @@ box in the local frame.
 | `dot` | a filled circle of diameter `width`, drawn without its label; for delta tensors |
 
 Every vertex of a polygonal shape is rounded by a circular fillet of radius
-`corner-radius`.  The radius is reduced, without a warning, so that no fillet
-uses more than half of either edge next to it; a very large radius therefore
-gives the roundest shape that the edges allow.
+`corner-radius`, the same at every vertex.  The radius is reduced, without a
+warning, to the largest value with which no fillet uses more than half of
+either edge next to it; a very large radius therefore gives the roundest
+shape that the edges allow.
 
 **Default sizes.**  Without `width` and `height`, a shape takes the default
 size of the registry, enlarged if needed so that the tensor's label fits with

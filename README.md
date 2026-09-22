@@ -130,6 +130,14 @@ The Rust side reads and writes the tnv language described in
   relative placement join tensors into rigid blocks and `at` pins them;
   everything else is placed automatically by stress majorization, starting
   from classical multidimensional scaling.  The result is deterministic.
+- `tnviz::order` sorts the pieces of a figure into drawing order
+  (section 8.9 of the language).
+- `tnviz::lighting` gives every surface its colours: mixes of base-colour
+  slots, shading programs that compile to PostScript calculator functions,
+  and label-colour rules (docs/lighting.md).
+- `tnviz::tikz` writes a figure in the runtime protocol of
+  `docs/protocol.md`, and `tex/tnviz-runtime.sty` draws it in a
+  `tikzpicture`.
 - `crates/tnviz-cli`: the `tnviz` command.
 
 ```sh
@@ -137,13 +145,25 @@ cargo test
 cargo run -p tnviz-cli -- check examples/tnv/sandwich.tnv
 cargo run -p tnviz-cli -- fmt examples/tnv/sandwich.tnv
 cargo run -p tnviz-cli -- layout examples/tnv/sandwich.tnv --svg layout.svg
+cargo run -p tnviz-cli -- tikz examples/tnv/sandwich.tnv -o sandwich.tikz
+```
+
+A `.tikz` file is drawn with the runtime, inside a picture whose unit is one
+layout unit:
+
+```latex
+\usepackage{tnviz-runtime}
+...
+\begin{tikzpicture}[x=1cm, y=1cm]\input{sandwich.tikz}\end{tikzpicture}
 ```
 
 `tnviz layout --svg` draws a plain picture of the layout and geometry,
 through the library's `debug-svg` feature, and `make geometry-preview` draws
-every file in `examples/tnv/` into `.preview/`.  Lighting, drawing order, and
-the TikZ backend are not implemented yet; the TeX package above is still the
-only renderer.
+every file in `examples/tnv/` into `.preview/`.  The debug SVG draws flat
+shapes, without the drawing order or the lighting model.  `make
+runtime-preview` draws every example through the TikZ backend and the
+runtime into `.preview/runtime/`.  Label sizes are still estimated: the
+LaTeX interface that measures them (`.tnvm`) is not written yet.
 
 Build locally viewable, ignored effect images with:
 

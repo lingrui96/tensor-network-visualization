@@ -297,27 +297,31 @@ pub fn fillet_open(vs: &[Vertex]) -> Filleted {
     out
 }
 
-/// Round every corner of a closed polygon given counter-clockwise; each
-/// fillet uses at most half of either edge next to it.  Returns the
-/// outline and the smallest radius used.
+/// Round every corner of a closed polygon given counter-clockwise with one
+/// radius, reduced so that no fillet uses more than half of either edge
+/// next to it.  Returns the outline and the radius used.
 pub fn fillet_closed(corners: &[V3], radius: f64) -> (Path, f64) {
     let n = corners.len();
     let dir = |k: usize| (corners[(k + 1) % n] - corners[k]).unit().unwrap();
     let len = |k: usize| (corners[(k + 1) % n] - corners[k]).norm();
+    let turn = |i: usize| {
+        let (e0, e1) = (dir((i + n - 1) % n), dir(i));
+        cross(e0, e1).atan2(dot(e0, e1))
+    };
+    let used = (0..n)
+        .map(|i| 0.5 * len((i + n - 1) % n).min(len(i)) / (turn(i).abs() / 2.0).tan())
+        .fold(radius, f64::min)
+        .max(0.0);
     let mut tl = vec![0.0; n];
     let mut arcs: Vec<Option<Piece>> = vec![None; n];
-    let mut used = radius;
     for i in 0..n {
         let h = (i + n - 1) % n;
-        let (e0, e1) = (dir(h), dir(i));
-        let delta = cross(e0, e1).atan2(dot(e0, e1));
-        let tan = (delta.abs() / 2.0).tan();
-        let rho = radius.min(0.5 * len(h).min(len(i)) / tan).max(0.0);
-        used = used.min(rho);
+        let (e0, delta) = (dir(h), turn(i));
+        let rho = used;
         if rho <= EPS {
             continue;
         }
-        tl[i] = rho * tan;
+        tl[i] = rho * (delta.abs() / 2.0).tan();
         let t_in = corners[i] - e0 * tl[i];
         let center = t_in + left(e0) * rho;
         let start = (t_in.y - center.y).atan2(t_in.x - center.x);

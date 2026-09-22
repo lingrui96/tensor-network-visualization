@@ -27,3 +27,16 @@ geometry-preview:
 	for f in examples/tnv/*.tnv; do \
 	  target/debug/tnviz layout $$f --svg $(PREVIEW_DIR)/geometry-$$(basename $$f .tnv).svg > /dev/null; \
 	done
+
+.PHONY: runtime-preview
+
+# Every example through the TikZ backend and tex/tnviz-runtime.sty.
+runtime-preview:
+	mkdir -p $(PREVIEW_DIR)/runtime
+	cargo build -q -p tnviz-cli
+	for f in examples/tnv/*.tnv; do \
+	  target/debug/tnviz tikz $$f -o $(PREVIEW_DIR)/runtime/$$(basename $$f .tnv).tikz; \
+	done
+	cp tex/runtime-preview.tex $(PREVIEW_DIR)/runtime/
+	cd $(PREVIEW_DIR)/runtime && TEXINPUTS=../../tex: pdflatex -interaction=nonstopmode -halt-on-error runtime-preview.tex > /dev/null
+	pdftoppm -r 150 -png $(PREVIEW_DIR)/runtime/runtime-preview.pdf $(PREVIEW_DIR)/runtime/page

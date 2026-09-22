@@ -1,0 +1,11 @@
+% Every example through the TikZ backend and the runtime: `make runtime-preview`.
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tnviz-runtime}
+\pagestyle{empty}
+\newcommand\fig[1]{\par\noindent\texttt{#1}\par\begin{tikzpicture}[x=1cm,y=1cm]\input{#1.tikz}\end{tikzpicture}\par\bigskip}
+\begin{document}
+\fig{shapes}\fig{routes}\fig{mps}\fig{sandwich}
+\newpage
+\fig{peps}\fig{ttn}
+\end{document}

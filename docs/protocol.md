@@ -1,6 +1,8 @@
 # Files between LaTeX and the engine
 
-Status: draft, 2026-09-22.  Not yet implemented.
+Status: draft, 2026-09-22.  The runtime protocol (section 3) is implemented
+by the TikZ backend (`tnviz tikz`) and `tex/tnviz-runtime.sty`; `.tnvm` and
+`tnviz tex` are not yet.
 
 LaTeX and `tnviz` exchange three kinds of files.  LaTeX never interprets tnv,
 and `tnviz` never typesets text or resolves colours.
@@ -100,11 +102,16 @@ them.
 | Command | Draws |
 |---|---|
 | `\tnvFill{<path>}{<colour>}{<opacity>}` | a filled path |
-| `\tnvStroke{<path>}{<colour>}{<width>}` | a stroked path; `<width>` is a TeX length |
-| `\tnvShade{<path>}{<cx>}{<cy>}{<extent>}{<code>}` | a PDF functional shading clipped to the path, on the square of half-size `<extent>` centred at (`<cx>`, `<cy>`); `<code>` is PostScript calculator code taking page coordinates and returning RGB |
+| `\tnvStroke{<path>}{<colour>}{<width>}{<cap>}` | a stroked path; `<width>` is a TeX length, `<cap>` is `round` or `butt` |
+| `\tnvShade{<path>}{<cx>}{<cy>}{<extent>}{<code>}` | a PDF functional shading clipped to the path, on the square of half-size `<extent>` centred at (`<cx>`, `<cy>`); `<code>` is PostScript calculator code taking page coordinates and returning RGB, using at most 100 stack entries |
 | `\tnvText{<id>}{<x>}{<y>}{<angle>}{<anchor>}{<font>}{<colour>}{<w>}{<h>}{<d>}{<text>}` | a label: `<text>` typeset with `<font>`, turned by `<angle>`, with its `<anchor>` at (`<x>`, `<y>`); `<w>`, `<h>`, `<d>` record the size geometry used, for the rerun check |
 
 Paths use TikZ path syntax in layout units: `--`, `arc[…]`, and `cycle`.
+Numbers are plain decimals with no exponent.  A label's `<anchor>` is
+`center`, or an angle in degrees naming the point of the label's box in
+that direction from its centre (a TikZ angle anchor).  `<angle>` is in
+degrees; `<w>`, `<h>`, and `<d>` are in pt, as in `.tnvm`.  `<text>` is TeX
+source: math in dollars, or text with TeX's special characters escaped.
 
 A label's `<colour>` is a colour argument as in 3.1, or
 

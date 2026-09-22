@@ -1,0 +1,142 @@
+% tnviz-runtime.sty -- draws figures written by the tnviz engine.
+%
+% The runtime protocol is specified in docs/protocol.md, section 3.  The
+% runtime only evaluates: it resolves colours with xcolor, typesets labels,
+% and draws the paths, fills, strokes, and shadings the engine computed, in
+% the order it wrote them.  It defines no geometry and no lighting of its
+% own.
+%
+% A .tikz file is input inside a tikzpicture whose x and y vectors are one
+% layout unit, such as
+%
+%   \begin{tikzpicture}[x=1cm, y=1cm]\input{paper-mps.tikz}\end{tikzpicture}
+%
+% The LaTeX interface (tnvfigure, .tnvm) will do this; until then it can be
+% done by hand.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{tnviz-runtime}[2026/09/22 v0.1 tnviz runtime, protocol 1]
+\RequirePackage{tikz}
+
+\def\tnv@protocol{1}
+
+\newcommand{\tnvRuntime}[1]{%
+  \ifnum#1=\tnv@protocol\relax\else
+    \PackageError{tnviz-runtime}{%
+      This figure uses runtime protocol #1, but this runtime reads protocol
+      \tnv@protocol}{Run the same version of tnviz and tnviz-runtime.sty.}%
+  \fi
+  % The layout unit, in pt, from the picture's x vector.
+  \edef\tnv@unit{\strip@pt\pgf@xx}%
+  \pgfmathsetmacro\tnv@bpscale{1.00375/\tnv@unit}%
+}
+
+% ---- Colours ---------------------------------------------------------------
+
+\def\tnv@splitrgb#1,#2,#3\relax#4{%
+  \expandafter\edef\csname tnv@R@#4\endcsname{#1}%
+  \expandafter\edef\csname tnv@G@#4\endcsname{#2}%
+  \expandafter\edef\csname tnv@B@#4\endcsname{#3}%
+}
+\newcommand{\tnvColor}[2]{%
+  \colorlet{tnv@slot@#1}{#2}%
+  \extractcolorspec{tnv@slot@#1}\tnv@spec
+  \expandafter\convertcolorspec\tnv@spec{rgb}\tnv@rgb
+  \expandafter\tnv@splitrgb\tnv@rgb\relax{#1}%
+}
+\newcommand*{\tnvSlot}[1]{tnv@slot@#1}
+\newcommand*{\tnvR}[1]{\csname tnv@R@#1\endcsname}
+\newcommand*{\tnvG}[1]{\csname tnv@G@#1\endcsname}
+\newcommand*{\tnvB}[1]{\csname tnv@B@#1\endcsname}
+
+% \tnvAutoColor is only read by \tnvText, which looks at the first token of
+% a label's colour argument.
+\newcommand{\tnvAutoColor}[7]{%
+  \PackageError{tnviz-runtime}{\string\tnvAutoColor\space outside \string\tnvText}{}}
+\def\tnv@autocolour#1#2#3#4#5#6#7{%
+  \pgfmathparse{(#2*\tnvR{#1} + #3*\tnvG{#1} + #4*\tnvB{#1}) > #5}%
+  \ifdim\pgfmathresult pt>0pt
+    \colorlet{tnv@text}{#6}%
+  \else
+    \colorlet{tnv@text}{#7}%
+  \fi
+}
+\def\tnv@peek#1#2\tnv@end{%
+  \ifx#1\tnvAutoColor
+    \expandafter\@firstoftwo
+  \else
+    \expandafter\@secondoftwo
+  \fi
+}
+\def\tnv@textcolour#1{%
+  \tnv@peek#1\tnv@end{\tnv@autocolourof#1}{\colorlet{tnv@text}{#1}}%
+}
+\def\tnv@autocolourof\tnvAutoColor{\tnv@autocolour}
+
+% ---- Drawing ---------------------------------------------------------------
+
+\newcommand{\tnvFill}[3]{%
+  \fill[color=#2, opacity=#3] #1;%
+}
+\newcommand{\tnvStroke}[4]{%
+  \draw[color=#2, line width=#3, line cap=#4, line join=round] #1;%
+}
+
+\newcount\tnv@shading
+% The shading's own coordinates are bp around its centre; the code first
+% turns them into page coordinates in layout units.
+\newcommand{\tnvShade}[5]{%
+  \global\advance\tnv@shading by 1
+  \edef\tnv@name{tnv shading \the\tnv@shading}%
+  \pgfmathsetmacro\tnv@extent{#4*\tnv@unit}%
+  \edef\tnv@code{%
+    exch \tnv@bpscale\space mul #2 add
+    exch \tnv@bpscale\space mul #3 add
+    #5}%
+  \pgfdeclarefunctionalshading{\tnv@name}%
+    {\pgfpoint{-\tnv@extent bp}{-\tnv@extent bp}}%
+    {\pgfpoint{\tnv@extent bp}{\tnv@extent bp}}{}{\tnv@code}%
+  \begin{scope}
+    \clip #1;
+    \begin{scope}[transform canvas={shift={(#2,#3)}}]
+      \pgfuseshading{\tnv@name}%
+    \end{scope}
+  \end{scope}%
+}
+
+% ---- Labels ----------------------------------------------------------------
+
+\newif\iftnv@sizeschanged
+\newsavebox\tnv@box
+% Called with the id and the measured width, height, and depth in pt; the
+% LaTeX interface redefines it to write them to .tnvm.
+\providecommand{\tnvMeasured}[4]{}
+
+\def\tnv@differs#1#2{%
+  \pgfmathparse{abs(#1 - #2) > 0.01}%
+  \ifdim\pgfmathresult pt>0pt \global\tnv@sizeschangedtrue \fi
+}
+% \tnvText has eleven arguments, more than a macro can take: it reads the
+% first seven and \tnv@text the last four.
+\newcommand{\tnvText}[7]{%
+  \def\tnv@id{#1}\def\tnv@x{#2}\def\tnv@y{#3}\def\tnv@angle{#4}%
+  \def\tnv@anchor{#5}\def\tnv@font{#6}%
+  \tnv@textcolour{#7}%
+  \tnv@text
+}
+\def\tnv@text#1#2#3#4{%
+  \sbox\tnv@box{\tnv@font#4}%
+  \edef\tnv@w{\strip@pt\wd\tnv@box}%
+  \edef\tnv@h{\strip@pt\ht\tnv@box}%
+  \edef\tnv@d{\strip@pt\dp\tnv@box}%
+  \tnvMeasured{\tnv@id}{\tnv@w}{\tnv@h}{\tnv@d}%
+  \tnv@differs{\tnv@w}{#1}\tnv@differs{\tnv@h}{#2}\tnv@differs{\tnv@d}{#3}%
+  \node[inner sep=0pt, outer sep=0pt, anchor=\tnv@anchor, rotate=\tnv@angle, text=tnv@text]
+    at (\tnv@x,\tnv@y) {\usebox\tnv@box};%
+}
+\AtEndDocument{%
+  \iftnv@sizeschanged
+    \PackageWarningNoLine{tnviz-runtime}{Label sizes changed; rerun tnviz}%
+  \fi
+}
+
+\endinput

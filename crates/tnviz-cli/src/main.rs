@@ -1,4 +1,4 @@
-//! `tnviz`: check, format, and lay out tnv files.
+//! `tnviz`: check, format, lay out, and draw tnv files.
 
 use std::process::ExitCode;
 
@@ -9,7 +9,9 @@ commands:
   check                 read a tnv file and summarize the network
   fmt                   print the network in canonical tnv
   layout [--svg FILE]   print tensor positions; --svg also draws a plain
-                        debugging picture of the layout and geometry";
+                        debugging picture of the layout and geometry
+  tikz [-o FILE]        write the figure in the runtime protocol, with
+                        estimated label sizes (standard output by default)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -73,6 +75,27 @@ fn run(args: &[String]) -> Result<(), Failure> {
                 }
                 std::fs::write(file, tnviz::debug_svg(&geom))
                     .map_err(|e| Failure::Message(format!("tnviz: cannot write {file}: {e}")))?;
+            }
+        }
+        ("tikz", rest) => {
+            let out = match rest {
+                [] => None,
+                [flag, file] if flag == "-o" => Some(file),
+                _ => return Err(Failure::Usage),
+            };
+            let fail = |e: tnviz::Error| Failure::Message(format!("{path}: {e}"));
+            let opts = tnviz::GeometryOptions::default();
+            let lay = tnviz::layout(&net).map_err(fail)?;
+            let geom = tnviz::geometry(&net, &lay, &opts, &tnviz::LabelSizes::new()).map_err(fail)?;
+            for w in &geom.warnings {
+                eprintln!("{path}: warning: {w}");
+            }
+            let light = tnviz::lighting(&net, &geom, &opts);
+            let code = tnviz::tikz(&net, &geom, &light, &tnviz::order(&net, &geom), &opts);
+            match out {
+                None => print!("{code}"),
+                Some(file) => std::fs::write(file, code)
+                    .map_err(|e| Failure::Message(format!("tnviz: cannot write {file}: {e}")))?,
             }
         }
         _ => return Err(Failure::Usage),
