@@ -188,8 +188,9 @@ pub fn geometry(
         lines.push(bond.line.clone());
         bonds.push(bond);
     }
-    for leg in &lay.legs {
-        lines.push(g.leg(leg, &tensors));
+    let offsets = g.leg_offsets(&lay.legs, &tensors);
+    for (leg, &(offset, side)) in lay.legs.iter().zip(&offsets) {
+        lines.push(g.leg(leg, &tensors, tensors[leg.tensor.0].center + side * offset));
     }
     let (mut crossings, upper_pieces) = g.crossings(&lines, &tensors);
     g.hops(&mut bonds, &mut lines, &mut crossings, &upper_pieces);
@@ -473,13 +474,60 @@ impl Builder<'_> {
         }
     }
 
-    fn leg(&mut self, leg: &crate::layout::PlacedLeg, tensors: &[TensorGeom]) -> LineGeom {
+    /// Where open legs leave their tensors (section 8.5): for each leg, its
+    /// sideways offset and the unit vector it is measured along.  Legs of a
+    /// tensor that share a direction, and have no `leg-offset`, are spread
+    /// evenly, in slot order, across the tensor.
+    fn leg_offsets(&self, legs: &[crate::layout::PlacedLeg], tensors: &[TensorGeom]) -> Vec<(f64, V3)> {
+        let mut out = Vec::with_capacity(legs.len());
+        let mut groups: std::collections::BTreeMap<(usize, i64, i64), Vec<usize>> = Default::default();
+        for (k, leg) in legs.iter().enumerate() {
+            let g = &tensors[leg.tensor.0];
+            // The perpendicular in reading order, in the local frame: to the
+            // right, or downwards for horizontal legs.
+            let d = leg.dir.rotate_z(-g.rotation);
+            let mut p = V3::xy(-d.y, d.x);
+            if p.x < -1e-9 || (p.x.abs() <= 1e-9 && p.y > 0.0) {
+                p = -p;
+            }
+            let side = p.rotate_z(g.rotation);
+            let attrs = self.net.leg_style(leg.tensor, leg.slot);
+            match self.length(&attrs, "leg-offset", false) {
+                Some(offset) => out.push((offset, side)),
+                None => {
+                    out.push((0.0, side));
+                    let key = (leg.tensor.0, (d.x * 1e6).round() as i64, (d.y * 1e6).round() as i64);
+                    groups.entry(key).or_default().push(k);
+                }
+            }
+        }
+        for members in groups.values_mut() {
+            if members.len() < 2 {
+                continue;
+            }
+            members.sort_by_key(|&k| legs[k].slot);
+            let (t, side) = (legs[members[0]].tensor, out[members[0]].1);
+            let g = &tensors[t.0];
+            // The chord through the centre, less the corner radii.
+            let r = g.corner_radius;
+            let lo = -self.boundary(tensors, t, -side) + r;
+            let hi = self.boundary(tensors, t, side) - r;
+            let (lo, hi) = if hi > lo { (lo, hi) } else { (0.0, 0.0) };
+            let n = members.len() as f64;
+            for (i, &k) in members.iter().enumerate() {
+                out[k].0 = lo + (i as f64 + 0.5) * (hi - lo) / n;
+            }
+        }
+        out
+    }
+
+    fn leg(&mut self, leg: &crate::layout::PlacedLeg, tensors: &[TensorGeom], start: V3) -> LineGeom {
         let attrs = self.net.leg_style(leg.tensor, leg.slot);
         let (style, width, _) = self.line_style(&attrs);
         let length = self.length(&attrs, "leg-length", false).unwrap_or(0.6);
-        let center = tensors[leg.tensor.0].center;
-        let end = center + leg.dir * (self.boundary(tensors, leg.tensor, leg.dir) + length);
-        let centerline = Path { pieces: vec![Piece::Line { a: center, b: end }], closed: false };
+        let inside = tensors[leg.tensor.0].outline.ray_distance(start, leg.dir).unwrap_or(0.0);
+        let end = start + leg.dir * (inside + length);
+        let centerline = Path { pieces: vec![Piece::Line { a: start, b: end }], closed: false };
         let cap = if word(&attrs, "cap") == Some("flat") { Cap::Flat } else { Cap::Round };
         let caps = (Cap::Round, cap);
         let outline = (style == LineStyle::Tube).then(|| tube_outline(&centerline, width / 2.0, caps));
@@ -641,8 +689,11 @@ impl Builder<'_> {
     fn visible(&self, line: &LineGeom, tensors: &[TensorGeom]) -> (f64, f64) {
         let total = line.centerline.length();
         let holders = self.net.index(line.index).holders();
-        let (_, start_dir) = line.centerline.at(0.0);
-        let hidden_a = self.boundary(tensors, holders[0].0, start_dir).min(total);
+        // Measured from where the centreline starts: an offset leg starts
+        // away from the centre.
+        let (start, start_dir) = line.centerline.at(0.0);
+        let first = &tensors[holders[0].0.0];
+        let hidden_a = first.outline.ray_distance(start, start_dir).unwrap_or(0.0).min(total);
         let hidden_b = match line.kind {
             LineKind::Leg => 0.0,
             LineKind::Bond => {

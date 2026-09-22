@@ -140,6 +140,17 @@ const FAN: f64 = 2.0;
 /// equally stay above it (0.5 for a triangle), the cancelling normals
 /// deep inside fall below it.
 const FADE: f64 = 0.4;
+/// Orbs: how far the light wraps past the terminator, the core shadow's
+/// tone, the glint, and the reflected light's width (as the normal's height
+/// above the page) and strength.
+const ORB_ELEVATION: f64 = 20.0;
+const ORB_LIT: f64 = 0.70;
+const ORB_WRAP: f64 = 0.2;
+const ORB_CORE: f64 = 0.66;
+const ORB_GLINT_PEAK: f64 = 0.85;
+const ORB_SHININESS: f64 = 40.0;
+const ORB_BOUNCE: f64 = 0.3;
+const ORB_BOUNCE_PEAK: f64 = 0.6;
 /// Tube light: elevation above the page and the Blinn-Phong terms.
 const TUBE_ELEVATION: f64 = 38.0;
 const TUBE_AMBIENT: f64 = 0.40;
@@ -423,28 +434,43 @@ fn glass_face(t: &TensorGeom, slot: usize, light: f64, hl: f64, inset: f64) -> S
     Shading { center, extent, program: p }
 }
 
-/// An orb: a radial gradient about a point moved towards the light, with
-/// the stops of a glass sphere.
+/// An orb: a sphere, lit by the world light raised above the page like a
+/// tube's, in the palette of the glass faces.  From the surface normal come
+/// the tones of a lit sphere: glint, lit side, the base colour as the
+/// halftone, a core shadow inside the silhouette, and reflected light at
+/// the shadow side's edge, which makes the sphere read as round.
 fn orb(t: &TensorGeom, slot: usize, light: f64) -> Shading {
     let radius = t.width / 2.0;
-    let hot = t.center + dir(light) * (0.566 * radius);
+    let el = ORB_ELEVATION.to_radians();
+    let l = V3::new(el.cos() * light.to_radians().cos(), el.cos() * light.to_radians().sin(), el.sin());
+    let h = V3::new(l.x, l.y, l.z + 1.0).unit().unwrap();
+    let flat = dir(light);
     let mut p = Program::new();
-    let dx = p.bind(sub(Expr::X, c(hot.x)));
-    let dy = p.bind(sub(Expr::Y, c(hot.y)));
-    let d = p.bind(div(sqrt(add(mul(dx.clone(), dx.clone()), mul(dy.clone(), dy))), c(radius)));
-    // Stops: distance / radius, and the colour as (keep, towards white).
-    let stops =
-        [(0.0, 0.15, true), (0.36, 0.75, true), (0.72, 0.70, false), (1.0, 0.50, false), (2.0, 0.0, false)];
+    let nx = p.bind(div(sub(Expr::X, c(t.center.x)), c(radius)));
+    let ny = p.bind(div(sub(Expr::Y, c(t.center.y)), c(radius)));
+    let r2 = p.bind(add(mul(nx.clone(), nx.clone()), mul(ny.clone(), ny.clone())));
+    let nz = p.bind(sqrt(max(c(0.0), sub(c(1.0), r2))));
+    let dot = |v: V3| add(add(mul(nx.clone(), c(v.x)), mul(ny.clone(), c(v.y))), mul(nz.clone(), c(v.z)));
+    // Wrapped Lambert: 0 in the core shadow, 1/2 at the halftone, 1 lit.
+    let w = p.bind(clamp01(div(add(dot(l), c(ORB_WRAP)), c(1.0 + ORB_WRAP))));
+    let to_base = p.bind(clamp01(mul(c(2.0), w.clone())));
+    let to_lit = p.bind(clamp01(sub(mul(c(2.0), w), c(1.0))));
+    let glint = p.bind(mul(c(ORB_GLINT_PEAK), pow(max(c(0.0), dot(h)), c(ORB_SHININESS))));
+    // Reflected light: at the silhouette, on the side away from the light.
+    let away = p.bind(max(c(0.0), neg(add(mul(nx.clone(), c(flat.x)), mul(ny.clone(), c(flat.y))))));
+    let tr = p.bind(clamp01(sub(c(1.0), div(nz, c(ORB_BOUNCE)))));
+    let bounce = p.bind(mul(c(ORB_BOUNCE_PEAK), mul(smooth(tr), away)));
+
     let channel = |ch: u8| {
-        let mut e = mixed(slot, ch, 0.0, false);
-        for w in stops.windows(2).rev() {
-            let ((d0, k0, w0), (d1, k1, w1)) = (w[0], w[1]);
-            let t = div(sub(d.clone(), c(d0)), c(d1 - d0));
-            let seg =
-                add(mixed(slot, ch, k0, w0), mul(sub(mixed(slot, ch, k1, w1), mixed(slot, ch, k0, w0)), t));
-            e = if_(lt(d.clone(), c(d1)), seg, e);
-        }
-        e
+        let core = mixed(slot, ch, ORB_CORE, false);
+        let base = param(slot, ch);
+        let lit = mixed(slot, ch, ORB_LIT, true);
+        let body = add(
+            add(core.clone(), mul(sub(base.clone(), core), to_base.clone())),
+            mul(sub(lit, base.clone()), to_lit.clone()),
+        );
+        let bounced = add(mul(body, sub(c(1.0), bounce.clone())), mul(base, bounce.clone()));
+        add(mul(bounced, sub(c(1.0), glint.clone())), mul(mixed(slot, ch, 0.06, true), glint.clone()))
     };
     p.output([channel(0), channel(1), channel(2)]);
     let (center, extent) = domain(&t.outline.sample(0.2));

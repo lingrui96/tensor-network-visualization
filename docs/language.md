@@ -380,9 +380,22 @@ are measured along the visible part only.
 
 ### 8.5 Open legs
 
-An open leg is a centreline from the tensor's centre in its leg direction `d`
-to the centre plus `d` times (boundary distance in `d` + `leg-length`).  It is
-drawn like a bond of its style, with its cap at the free end.
+An open leg is a centreline from its start point in its leg direction `d`,
+through the tensor's outline, and `leg-length` beyond it.  It is drawn like a
+bond of its style, with its cap at the free end.
+
+The start point is the tensor's centre moved sideways, along the unit vector
+p perpendicular to `d` in reading order (in the local frame, p points right,
+or down when `d` is horizontal):
+
+- **Spread.**  The n legs of a tensor that share a direction and have no
+  `leg-offset` divide the chord of the silhouette through the centre along
+  p, less the corner radius at both ends, into n equal parts, in slot order;
+  each starts at the middle of its part.  A leg alone in its direction
+  starts at the centre.
+- **`leg-offset`** starts a leg that far along p instead, and takes it out
+  of the spread.  An offset beyond the silhouette starts the leg outside the
+  tensor.
 
 ### 8.6 Parallel bonds and loops
 
@@ -585,6 +598,7 @@ Unknown attributes, and values of the wrong type, are errors.
 | `z` | bonds | order | number | `0` | order |
 | `leg-dir` | legs, bond ends | layout | direction | section 7.3 | layout |
 | `leg-length` | legs | geometry | length | `.6` | geometry |
+| `leg-offset` | legs | geometry | length | spread (section 8.5) | geometry |
 | `label` | bonds, legs | appearance | text, `dim`, `name`, `dim+prime` | none | backend |
 | `label-pos` | bonds, legs | geometry | number in [0, 1] | `.5` | geometry |
 | `label-placement` | bonds, legs | geometry | `on`, `beside` | tube: `on` if the label fits, else `beside`; line: `beside` | geometry |

@@ -62,6 +62,38 @@ fn legs_reach_past_the_outline() {
 }
 
 #[test]
+fn legs_sharing_a_direction_spread_across_the_tensor() {
+    let starts = |src: &str| -> Vec<(f64, f64)> {
+        let (_, g) = build(src);
+        g.lines
+            .iter()
+            .filter(|l| l.kind == LineKind::Leg)
+            .map(|l| {
+                let p = l.centerline.at(0.0).0;
+                (p.x, p.y)
+            })
+            .collect()
+    };
+    // Width 4 less the corner radii: 3.6, in four parts of .9.
+    let base = "A [width=4, corner-radius=.2, label=none]\nA: legs down, down, down, down\nA: leg up\n";
+    let s = starts(base);
+    for (k, x) in [-1.35, -0.45, 0.45, 1.35].into_iter().enumerate() {
+        assert!(close(s[k].0, x) && close(s[k].1, 0.0), "{s:?}");
+    }
+    assert!(close(s[4].0, 0.0), "a leg alone stays at the centre");
+    // An explicit offset takes a leg out of the spread; the others close up.
+    let s = starts(&format!("{base}A.#2 [leg-offset=.1]\n"));
+    for (k, x) in [(0, -1.2), (1, 0.1), (2, 0.0), (3, 1.2)] {
+        assert!(close(s[k].0, x), "{s:?}");
+    }
+    // Every leg keeps the same visible length below the outline.
+    let (_, g) = build(base);
+    for l in g.lines.iter().filter(|l| l.kind == LineKind::Leg) {
+        assert!(close(l.visible.1 - l.visible.0, 0.6));
+    }
+}
+
+#[test]
 fn bonds_hide_inside_their_tensors() {
     let (net, g) = build("A at (0, 0)\nB at (3, 0)\nA - B\n");
     let bond = &g.lines[0];

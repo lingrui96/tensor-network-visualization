@@ -100,6 +100,7 @@ const SPECS: &[Spec] = &[
     Spec { key: "layer", targets: B, category: Order, kind: Word(&["back", "front"]) },
     Spec { key: "leg-dir", targets: L, category: Layout, kind: Direction },
     Spec { key: "leg-length", targets: L, category: Geometry, kind: Length },
+    Spec { key: "leg-offset", targets: L, category: Geometry, kind: Length },
     Spec { key: "label-pos", targets: BL, category: Geometry, kind: Fraction },
     Spec { key: "label-placement", targets: BL, category: Geometry, kind: Word(&["on", "beside"]) },
     Spec { key: "label-side", targets: BL, category: Geometry, kind: Word(&["auto", "left", "right"]) },

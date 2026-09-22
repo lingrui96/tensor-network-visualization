@@ -108,18 +108,26 @@ outline.
 
 ### 3.3 Orbs and dots
 
-A radial gradient centred on a point 0.566 R from the centre towards the
-light, where R is the radius.  Stops, by distance / R:
+An orb is shaded as a sphere, in the colours of the glass faces
+(section 3.2).  At each point, with R the radius and (x, y) the offset from
+the centre over R, the normal is n = (x, y, √(1 − x² − y²)).  The light is
+raised 20° above the page, L = (cos 20°·cos φ, cos 20°·sin φ, sin 20°), and
+H is the half vector between L and the viewer.  From n come the tones of a
+lit sphere:
 
-| d/R | colour |
+| Tone | Formula |
 |---|---|
-| 0 | 15% with white |
-| .36 | 75% with white |
-| .72 | 70% with black |
-| 1 | 50% with black |
-| 2 | black |
+| light | w = clamp((n·L + .2) / 1.2), wrapped Lambert |
+| body | core shadow `.66c` at w = 0, the base colour c at w = ½, `.70c + .30` at w = 1, linear between |
+| reflected light | Rf = .6 · smooth(clamp(1 − n_z / .3)) · max(0, −(x, y)·L̂), towards c, where L̂ is the light's page direction |
+| glint | G = .85 · max(0, n·H)⁴⁰, towards `.06c + .94` |
 
-The colour changes linearly between stops.
+The core shadow lies inside the silhouette, and reflected light brightens
+the shadow side's edge again; together with the small glint they make the
+orb read as round.  No tone mixes towards black beyond `.66c`, so light
+colours stay clean.  (Two earlier versions were rejected: radial stops
+towards black looked grey and dirty, and a flat gradient with rims along
+the outline looked like a disc.)
 
 ## 4. Bonds and legs
 
