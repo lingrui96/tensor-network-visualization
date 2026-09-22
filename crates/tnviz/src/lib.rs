@@ -7,11 +7,13 @@
 
 pub mod error;
 pub mod lang;
+pub mod layout;
 pub mod model;
 pub mod name;
 pub mod value;
 
 pub use error::{Error, Pos, Result};
 pub use lang::{parse, to_tnv};
+pub use layout::{Layout, LayoutOptions, layout};
 pub use model::{Index, IndexId, Network, Tensor, TensorId};
 pub use name::Name;

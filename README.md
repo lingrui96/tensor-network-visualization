@@ -119,16 +119,23 @@ The Rust side reads and writes the tnv language described in
   `Network` (tensors, indices, groups, layout statements, and style rules),
   and `tnviz::to_tnv` prints any network in canonical tnv.  Style rules are
   resolved with `tensor_style`, `bond_style`, and `leg_style`.
+- `tnviz::layout` places a network: tensor positions, open-leg directions,
+  and bond routes, in layout units.  `chain`, `grid`, `tree`, `stack`, and
+  relative placement join tensors into rigid blocks and `at` pins them;
+  everything else is placed automatically by stress majorization, starting
+  from classical multidimensional scaling.  The result is deterministic.
 - `crates/tnviz-cli`: the `tnviz` command.
 
 ```sh
 cargo test
 cargo run -p tnviz-cli -- check examples/tnv/sandwich.tnv
 cargo run -p tnviz-cli -- fmt examples/tnv/sandwich.tnv
+cargo run -p tnviz-cli -- layout examples/tnv/sandwich.tnv --svg layout.svg
 ```
 
-Layout and rendering are not implemented yet; the TeX package above is still
-the only renderer.
+`tnviz layout --svg` draws a plain picture for checking layouts.  Geometry
+and rendering are not implemented yet; the TeX package above is still the
+only renderer.
 
 Build locally viewable, ignored effect images with:
 
