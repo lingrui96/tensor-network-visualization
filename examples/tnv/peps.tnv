@@ -1,0 +1,3 @@
+// A 3x3 projected entangled pair state.
+grid T 3x3
+T[*]: leg down-left

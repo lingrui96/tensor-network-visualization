@@ -1,0 +1,7 @@
+// A tree tensor network.
+R - L[1], L[2]
+L[1] - X[1], X[2]
+L[2] - X[3], X[4]
+X[*]: leg down
+tree R down
+* [shape=triangle]

@@ -78,6 +78,13 @@ impl Sub for V3 {
     }
 }
 
+impl std::ops::Neg for V3 {
+    type Output = V3;
+    fn neg(self) -> V3 {
+        V3::new(-self.x, -self.y, -self.z)
+    }
+}
+
 impl Mul<f64> for V3 {
     type Output = V3;
     fn mul(self, k: f64) -> V3 {

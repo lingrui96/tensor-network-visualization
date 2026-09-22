@@ -1,0 +1,9 @@
+// Routes through via points, a port, and hops at crossings.
+A at (0, 0); B at (5, 0)
+A.r - B.l [tube, via=(1.5, 2), (3.5, 2), (3.5, -1), (5, -1.2)]
+A.r [leg-dir=up]
+B [shape=orb, rotate=45]
+X at (1, -2); Y at (4, 1.5)
+X - Y [tube, hop]
+P at (0.5, 1); Q at (4.5, 1)
+P - Q [hop]

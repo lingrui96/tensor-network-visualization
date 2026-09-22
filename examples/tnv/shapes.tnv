@@ -1,0 +1,15 @@
+// Shapes, parallel bonds, a loop on a rotated tensor, and a hop.
+A at (0, 0); B at (4, 0); C at (2, 2.5)
+A [shape=triangle]
+B [shape=diamond]
+C [shape=orb]
+A - B - C - A
+A.x - B.x
+A.y - B.y
+D at (2, -1.5)
+C.#3 [leg-dir=down]
+D - C [tube, hop, label=$d$, label-placement=beside]
+Z at (6, 1)
+Z.l - Z.r [tube]
+Z [rotate=30]
+Z: leg p up

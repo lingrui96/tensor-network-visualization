@@ -9,6 +9,7 @@
 //! are private to the crate.
 
 mod error;
+mod geometry;
 mod lang;
 mod layout;
 mod model;
@@ -20,6 +21,10 @@ mod value;
 mod debug_svg;
 
 pub use error::{Error, Pos, Result};
+pub use geometry::{
+    Anchor, Cap, Crossing, Geometry, GeometryOptions, LabelGeom, LabelSizes, LineGeom, LineKind, LineStyle,
+    Path, Piece, Shape, TensorGeom, geometry,
+};
 pub use lang::{VERSION, parse, to_tnv};
 pub use layout::{
     BondEnd, DEFAULT_SPACING, PlacedBond, PlacedLeg, PlacedTensor, Placement, Route, V3, layout,

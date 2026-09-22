@@ -17,3 +17,13 @@ preview:
 	mv $(PREVIEW_DIR)/bond-3.png $(PREVIEW_DIR)/bonds-polyline-tube.png
 	mv $(PREVIEW_DIR)/bond-4.png $(PREVIEW_DIR)/bonds-crossings.png
 	mv $(PREVIEW_DIR)/bond-5.png $(PREVIEW_DIR)/bonds-labels.png
+
+.PHONY: geometry-preview
+
+# Plain debugging pictures of the engine's layout and geometry.
+geometry-preview:
+	mkdir -p $(PREVIEW_DIR)
+	cargo build -q -p tnviz-cli
+	for f in examples/tnv/*.tnv; do \
+	  target/debug/tnviz layout $$f --svg $(PREVIEW_DIR)/geometry-$$(basename $$f .tnv).svg > /dev/null; \
+	done

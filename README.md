@@ -121,7 +121,12 @@ The Rust side reads and writes the tnv language described in
   `tnviz::to_tnv` prints any network in canonical tnv.  Attributes are
   resolved with `tensor_style`, `bond_style`, and `leg_style`.
 - `tnviz::layout` places a network: tensor positions, open-leg directions,
-  and bond routes, in layout units.  `chain`, `grid`, `tree`, `stack`, and
+  and bond routes, in layout units.
+- `tnviz::geometry` builds the geometry of section 8 of the language:
+  tensor outlines sized to their labels, filleted centrelines of bonds and
+  legs, tube outlines, visible lengths, crossings with hops, and label
+  positions.  Label sizes come from LaTeX when known and are estimated
+  otherwise.  `chain`, `grid`, `tree`, `stack`, and
   relative placement join tensors into rigid blocks and `at` pins them;
   everything else is placed automatically by stress majorization, starting
   from classical multidimensional scaling.  The result is deterministic.
@@ -134,9 +139,11 @@ cargo run -p tnviz-cli -- fmt examples/tnv/sandwich.tnv
 cargo run -p tnviz-cli -- layout examples/tnv/sandwich.tnv --svg layout.svg
 ```
 
-`tnviz layout --svg` draws a plain picture for checking layouts, through the
-library's `debug-svg` feature.  Geometry and rendering are not implemented
-yet; the TeX package above is still the only renderer.
+`tnviz layout --svg` draws a plain picture of the layout and geometry,
+through the library's `debug-svg` feature, and `make geometry-preview` draws
+every file in `examples/tnv/` into `.preview/`.  Lighting, drawing order, and
+the TikZ backend are not implemented yet; the TeX package above is still the
+only renderer.
 
 Build locally viewable, ignored effect images with:
 

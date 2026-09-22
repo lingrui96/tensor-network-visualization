@@ -427,6 +427,9 @@ on its piece, is left alone with a warning.
     by `label-side`.  `auto` is the side whose normal points up, or left on a
     vertical bond; `left` and `right` are relative to the bond's direction
     from its first end to its second.
+  - Without `label-placement`, a label on a tube is `on` when its height
+    plus depth fits the tube's diameter, and `beside` otherwise; a label on a
+    line is `beside`.  Only an explicit `on` that does not fit warns.
 - **Open-leg labels** follow the bond-label rules along the leg.
 
 ### 8.9 Drawing order
@@ -583,7 +586,7 @@ Unknown attributes, and values of the wrong type, are errors.
 | `leg-length` | legs | geometry | length | `.6` | geometry |
 | `label` | bonds, legs | appearance | text, `dim`, `name`, `dim+prime` | none | backend |
 | `label-pos` | bonds, legs | geometry | number in [0, 1] | `.5` | geometry |
-| `label-placement` | bonds, legs | geometry | `on`, `beside` | tube `on`, line `beside` | geometry |
+| `label-placement` | bonds, legs | geometry | `on`, `beside` | tube: `on` if the label fits, else `beside`; line: `beside` | geometry |
 | `label-side` | bonds, legs | geometry | `auto`, `left`, `right` | `auto` | geometry |
 | `label-along`, `label-offset` | bonds, legs | geometry | length | `0` | geometry |
 | `label-shift` | bonds, legs | geometry | a point | `(0, 0)` | geometry |
@@ -672,6 +675,8 @@ them.  `docs/protocol.md` specifies the files and the order of runs.
 - **Attributes of every category share one selector syntax and cascade**;
   the category decides only which stage reads them.
 - **Corner radii are clamped silently; bends tighter than a tube warn.**
+- **A tube label goes beside the tube when it does not fit on it**, unless
+  `label-placement=on` asks otherwise.
 
 **Deferred**
 - **Whether `grid` connects neighbours, and the default direction of open

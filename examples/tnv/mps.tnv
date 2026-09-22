@@ -1,0 +1,4 @@
+// A matrix product state.
+chain A[1..6]
+A[*]: leg down
+A[3] - A[4] [label=$\chi$]

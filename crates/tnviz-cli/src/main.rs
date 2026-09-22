@@ -9,7 +9,7 @@ commands:
   check                 read a tnv file and summarize the network
   fmt                   print the network in canonical tnv
   layout [--svg FILE]   print tensor positions; --svg also draws a plain
-                        debugging picture of the layout";
+                        debugging picture of the layout and geometry";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -61,7 +61,17 @@ fn run(args: &[String]) -> Result<(), Failure> {
                 println!("{:<12} {:>8.3} {:>8.3} {:>8.3}", t.name.to_string(), p.x, p.y, p.z);
             }
             if let Some(file) = svg {
-                std::fs::write(file, tnviz::debug_svg(&net, &lay))
+                let geom = tnviz::geometry(
+                    &net,
+                    &lay,
+                    &tnviz::GeometryOptions::default(),
+                    &tnviz::LabelSizes::new(),
+                )
+                .map_err(|e| Failure::Message(format!("{path}: {e}")))?;
+                for w in &geom.warnings {
+                    eprintln!("{path}: warning: {w}");
+                }
+                std::fs::write(file, tnviz::debug_svg(&geom))
                     .map_err(|e| Failure::Message(format!("tnviz: cannot write {file}: {e}")))?;
             }
         }

@@ -230,8 +230,22 @@ fn direction_word(w: &str) -> Option<Direction> {
 // Values have been validated, so an accessor returns `None` only when the
 // attribute is not set.
 
-fn get<'a>(attrs: &'a [Attr], key: &str) -> Option<&'a Value> {
+pub(crate) fn get<'a>(attrs: &'a [Attr], key: &str) -> Option<&'a Value> {
     attrs.iter().find(|a| a.key == key).map(|a| &a.value)
+}
+
+pub(crate) fn word<'a>(attrs: &'a [Attr], key: &str) -> Option<&'a str> {
+    match get(attrs, key)? {
+        Value::Word(w) => Some(w),
+        _ => None,
+    }
+}
+
+pub(crate) fn number(attrs: &[Attr], key: &str) -> Option<f64> {
+    match get(attrs, key)? {
+        Value::Number(x) => Some(*x),
+        _ => None,
+    }
 }
 
 pub(crate) fn angle(attrs: &[Attr], key: &str) -> Option<f64> {

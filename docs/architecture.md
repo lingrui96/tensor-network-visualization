@@ -223,7 +223,9 @@ cascade), E4 (layout records parallel bonds and loops as route intents and
 leaves sizes and leg lengths to geometry), E5 (the `spacing` statement), E6
 (stages are private modules; the crate root exports the API, and the model
 changes only through checked operations), E7 (`LayoutStmt` and
-`Placement`).  E8 remains.
+`Placement`).  E8 is in progress: the geometry stage is built for 2D;
+order, the lighting model, backends, `.tnvm` input, and resolved printing
+remain.
 
 ### 6.3 CLI (crates/tnviz-cli)
 
